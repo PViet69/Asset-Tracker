@@ -2,7 +2,7 @@
 
 ## Summary
 
-Build a backend-only FastAPI dependency service that accepts uploaded files, sends their extracted content to an external embedding model endpoint, stores resulting vectors in Qdrant, and returns Qdrant ids. No user interface is included.
+Build a backend-only FastAPI dependency service that accepts uploaded files, sends their extracted content to an external embedding model endpoint, and stores resulting vectors in Qdrant. No user interface is included.
 
 The service supports text files, images, and PDFs for now. It stores one embedding per uploaded file.
 
@@ -10,15 +10,15 @@ The service supports text files, images, and PDFs for now. It stores one embeddi
 
 - Provide a file upload embedding endpoint for another project to consume.
 - Support text files, images, and PDFs.
-- Return one Qdrant id per uploaded file.
-- Store embeddings and metadata in Qdrant.
+- Store embeddings in Qdrant.
+
 - Keep the service simple and focused.
 
 ## Non-Goals
 
 - No frontend or upload page.
 - No OCR for scanned PDFs.
-- No direct model hosting inside this service.
+
 - No raw embedding vectors returned to the caller.
 - No search endpoint in this first version.
 
@@ -29,7 +29,7 @@ The service has four main responsibilities:
 1. Accept file uploads through an HTTP endpoint.
 2. Validate and convert each file into model-ready input.
 3. Call an external embedding model endpoint.
-4. Store resulting vectors in Qdrant and return stored ids.
+4. Store resulting vectors in Qdrant.
 
 High-level flow:
 
@@ -41,9 +41,8 @@ FOR EACH file:
     convert file into text or image input
     send converted input to external embedding model endpoint
     receive embedding vector
-    create Qdrant point with vector and metadata
+    create Qdrant point with vector
     store point in Qdrant
-    add id to response
 SERVICE returns response with per-file results
 ```
 
@@ -86,7 +85,6 @@ FileEmbeddingResponse:
 FileEmbeddingItem:
     filename: original uploaded filename
     content_type: uploaded content type when available
-    id: Qdrant id when stored successfully
     error: error message when processing failed
 ```
 
@@ -96,8 +94,8 @@ Example response shape:
 response object:
     object is list
     data contains:
-        item with filename report.pdf, content type application/pdf, id generated UUID, no error
-        item with filename photo.png, content type image/png, id generated UUID, no error
+        item with filename report.pdf, content type application/pdf, no error
+        item with filename photo.png, content type image/png, no error
 ```
 
 ### Health endpoint
@@ -122,33 +120,6 @@ HealthResponse:
     model: external model endpoint status
 ```
 
-### Retrieval endpoint
-
-`GET /v1/file-embeddings/{id}`
-
-Behavior:
-
-```text
-receive id
-look up point payload in Qdrant
-IF point exists:
-    return stored metadata without vector
-ELSE:
-    return not found error
-```
-
-Response shape:
-
-```text
-StoredFileEmbeddingResponse:
-    id: Qdrant id
-    filename: stored filename
-    content_type: stored content type
-    file_type: detected file type
-    model: embedding model used
-    created_at: storage timestamp
-```
-
 ## Pydantic Models
 
 Use Pydantic models for response bodies and validated request configuration fields.
@@ -164,7 +135,6 @@ FileEmbeddingRequest:
 FileEmbeddingItem:
     filename: string
     content_type: string or empty
-    id: string or empty
     error: string or empty
 
 FileEmbeddingResponse:
@@ -183,14 +153,6 @@ HealthResponse:
     status: string
     qdrant: string
     model: string
-
-StoredFileEmbeddingResponse:
-    id: string
-    filename: string
-    content_type: string
-    file_type: string
-    model: string
-    created_at: string timestamp
 ```
 
 ## File Handling
@@ -309,7 +271,7 @@ No secrets are hardcoded.
 
 ## Qdrant Integration
 
-Qdrant stores vectors and metadata.
+Qdrant stores vectors.
 
 Collection:
 
@@ -334,19 +296,7 @@ embedding vector returned by external model endpoint
 Point payload:
 
 ```text
-filename: original uploaded filename
-content_type: uploaded content type when available
-file_type: detected type such as text, image, or pdf
-model: model name used
-created_at: current timestamp
-```
-
-Optional future payload fields:
-
-```text
-document_id
-project_id
-tags
+no payload — vector only, sufficient for vector search
 ```
 
 Qdrant behavior:
@@ -426,7 +376,7 @@ never write uploaded files using original filename without sanitization
 never hardcode API keys
 limit file count
 limit file size
-validate file type by extension and content where possible
+validate file type by MIME content via python-magic
 reject empty files
 return safe error messages to client
 log detailed server-side context without leaking secrets
@@ -441,10 +391,10 @@ Implementation should follow TDD.
 Unit tests:
 
 ```text
-file type detection returns text for supported text extensions
-file type detection returns image for supported image extensions
-file type detection returns pdf for PDF extension
-file type detection rejects unsupported extension
+file type detection returns text for text/plain MIME
+file type detection returns image for image/png MIME
+file type detection returns pdf for application/pdf MIME
+file type detection rejects unsupported MIME
 text decode succeeds for UTF-8 file
 text decode fails cleanly for invalid bytes
 image validation succeeds for valid image
@@ -464,16 +414,14 @@ POST file embeddings with one PDF file stores one Qdrant point
 POST file embeddings with multiple files returns one item per file
 model endpoint client receives text input for text files
 model endpoint client receives image input for image files
-Qdrant client receives vector and payload
-GET stored point returns metadata without vector
-GET missing point returns not found error
+Qdrant client receives vector
 GET health reports Qdrant and model status
 ```
 
 Error tests:
 
 ```text
-unsupported extension returns per-file error
+unsupported MIME type returns per-file error
 empty file returns per-file error
 too many files returns request error
 oversized file returns request error
@@ -492,7 +440,7 @@ mock Qdrant client or use test Qdrant instance
 
 - No UI is included.
 - Endpoint uses multipart file uploads, not OpenAI standard JSON embeddings format.
-- Service returns Qdrant ids only, not raw embedding vectors.
+- Service stores embeddings in Qdrant, not returned to caller.
 - One embedding is stored per uploaded file.
 - PDFs use text extraction only for first version.
 - Scanned PDFs and OCR are out of scope for now.
