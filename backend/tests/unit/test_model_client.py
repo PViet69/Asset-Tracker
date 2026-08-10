@@ -94,8 +94,10 @@ def test_embed_image_timeout_raises() -> None:
     )
     client = OpenAICompatibleModelClient.from_client(sdk)
 
-    with pytest.raises(ModelEndpointError, match="timed out"):
+    with pytest.raises(ModelEndpointError) as exc_info:
         client.embed_image(b"img", "model-b")
+
+    assert str(exc_info.value) == "Model endpoint timed out"
 
 
 def test_embed_image_connection_error_raises() -> None:

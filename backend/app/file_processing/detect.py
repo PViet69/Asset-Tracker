@@ -45,4 +45,4 @@ def detect_file_group(content: bytes) -> FileGroup:
     if any(mime_sub in mime for mime_sub in _IMAGE_MIME_SUBSTRINGS):
         return "image"
 
-    raise FileProcessingError(f"Unsupported file type: {mime}")
+    raise FileProcessingError("Unsupported file type")

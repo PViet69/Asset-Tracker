@@ -30,6 +30,6 @@ def test_detects_pdf_from_content():
 
 
 @pytest.mark.unit
-def test_rejects_unknown_content():
+def test_rejects_unknown_content() -> None:
     with pytest.raises(FileProcessingError, match="Unsupported file type"):
-        detect_file_group(b"not a known format")
+        detect_file_group(b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\x03")
