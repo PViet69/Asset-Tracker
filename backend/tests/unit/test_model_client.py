@@ -113,15 +113,16 @@ def test_embed_image_connection_error_raises() -> None:
 
 def test_check_health_ok() -> None:
     sdk = Mock()
-    sdk.embeddings.create.return_value.data = [Mock(embedding=[0.0])]
     client = OpenAICompatibleModelClient.from_client(sdk)
 
     assert client.check_health() == "ok"
+    sdk.models.list.assert_called_once_with()
 
 
 def test_check_health_unavailable() -> None:
     sdk = Mock()
-    sdk.embeddings.create.side_effect = ConnectionError()
+    sdk.models.list.side_effect = ConnectionError()
     client = OpenAICompatibleModelClient.from_client(sdk)
 
     assert client.check_health() == "unavailable"
+    sdk.models.list.assert_called_once_with()

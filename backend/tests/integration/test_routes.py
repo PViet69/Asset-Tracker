@@ -16,7 +16,10 @@ from backend.app.api.schemas.file_embeddings import (
 from backend.app.exceptions import ModelEndpointError, QdrantStorageError
 from backend.app.file_embeddings.service import FileEmbeddingService, FileUpload
 from backend.app.file_processing.service import MAX_FILE_SIZE
-from backend.app.integrations.model_client import ModelClient
+from backend.app.integrations.model_client import (
+    ModelClient,
+    OpenAICompatibleModelClient,
+)
 from backend.app.integrations.qdrant_store import QdrantStore
 from backend.app.main import create_app
 
@@ -360,6 +363,25 @@ def test_real_service_returns_safe_qdrant_error_per_file() -> None:
         "valid text", "text-embedding-model"
     )
     qdrant_store.store_embedding.assert_called_once_with([0.1, 0.2])
+
+
+@pytest.mark.integration
+def test_health_uses_model_listing_for_openai_compatible_client() -> None:
+    service = Mock(spec=FileEmbeddingService)
+    sdk = Mock()
+    model_client = OpenAICompatibleModelClient.from_client(sdk)
+    dependencies = HealthDependencies(
+        model_client=model_client,
+        qdrant_store=_HealthQdrantStore("ok"),
+    )
+    app = create_app(service=service, health_dependencies=dependencies)
+
+    with TestClient(app) as client:
+        response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "qdrant": "ok", "model": "ok"}
+    sdk.models.list.assert_called_once_with()
 
 
 @pytest.mark.integration

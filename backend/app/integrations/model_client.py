@@ -82,7 +82,7 @@ class OpenAICompatibleModelClient:
     def check_health(self) -> str:
         """Return 'ok' if the model endpoint responds, else 'unavailable'."""
         try:
-            self._client.embeddings.create(model="health-check", input="ping")
+            self._client.models.list()
         except Exception:  # noqa: BLE001
             return "unavailable"
         return "ok"
