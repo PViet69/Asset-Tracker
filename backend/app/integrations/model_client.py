@@ -4,6 +4,8 @@ import base64
 import logging
 from typing import Protocol
 
+import magic
+
 from backend.app.config import Settings
 from backend.app.exceptions import ModelEndpointError
 from openai import APIConnectionError, APIError, APITimeoutError, OpenAI
@@ -57,11 +59,14 @@ class OpenAICompatibleModelClient:
     def embed_image(self, image_bytes: bytes, model: str) -> list[float]:
         """Embed image bytes and return the numeric vector.
 
-        Image data is base64-encoded into a ``data:image/png;base64,`` URI,
-        matching the model endpoint contract.
+        Image data is base64-encoded into a data URI using detected MIME type.
+        Unknown image types default to PNG for compatibility.
         """
         b64 = base64.b64encode(image_bytes).decode("ascii")
-        data_url = f"data:image/png;base64,{b64}"
+        mime_type = magic.from_buffer(image_bytes, mime=True)
+        if mime_type not in {"image/jpeg", "image/webp", "image/png"}:
+            mime_type = "image/png"
+        data_url = f"data:{mime_type};base64,{b64}"
 
         try:
             response = self._client.embeddings.create(model=model, input=data_url)

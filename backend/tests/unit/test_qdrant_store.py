@@ -27,6 +27,7 @@ def test_settings_require_model_and_qdrant_urls(
 def test_constructs_client_once_from_settings() -> None:
     settings = Settings(
         MODEL_ENDPOINT_URL="https://model.example",
+        UPLOAD_API_KEY="upload-secret",
         QDRANT_URL="https://qdrant.example",
         QDRANT_API_KEY="secret-key",
         QDRANT_COLLECTION=COLLECTION,
@@ -67,6 +68,7 @@ def test_ensure_collection_creates_missing_configured_collection() -> None:
 def test_ensure_collection_uses_configured_distance() -> None:
     settings = Settings(
         MODEL_ENDPOINT_URL="https://model.example",
+        UPLOAD_API_KEY="upload-secret",
         QDRANT_URL="https://qdrant.example",
         QDRANT_COLLECTION=COLLECTION,
         QDRANT_VECTOR_SIZE=2,

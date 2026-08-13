@@ -24,11 +24,16 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
+pythonpath = ["."]
 markers = [
     "unit: Unit tests",
     "integration: Integration tests",
 ]
 testpaths = ["backend/tests"]
+filterwarnings = [
+    "ignore:.*starlette.testclient.*",
+    "ignore:.*httpx.*starlette.testclient.*",
+]
 
 [tool.ruff]
 target-version = "py312"

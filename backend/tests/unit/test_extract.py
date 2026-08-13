@@ -76,3 +76,28 @@ def test_blank_pdf_raises():
 
     with pytest.raises(FileProcessingError, match="PDF has no extractable text"):
         extract_pdf_text(stream.getvalue())
+
+
+@pytest.mark.unit
+def test_malformed_pdf_raises_file_processing_error():
+    with pytest.raises(FileProcessingError, match="Invalid PDF"):
+        extract_pdf_text(b"%PDF-1.4 malformed data stream header")
+
+
+@pytest.mark.unit
+def test_extract_pdf_text_preserves_page_boundaries(monkeypatch: pytest.MonkeyPatch):
+    class FakePage:
+        def __init__(self, text: str) -> None:
+            self._text = text
+
+        def extract_text(self) -> str:
+            return self._text
+
+    class FakeReader:
+        def __init__(self, _stream: object) -> None:
+            self.pages = [FakePage("Page 1 content"), FakePage("Page 2 content")]
+
+    monkeypatch.setattr("backend.app.file_processing.extract.PdfReader", FakeReader)
+
+    result = extract_pdf_text(_MINIMAL_TEXT_PDF)
+    assert result == "Page 1 content\n\nPage 2 content"

@@ -7,6 +7,8 @@ from pypdf import PdfReader
 
 from backend.app.exceptions import FileProcessingError
 
+MAX_IMAGE_PIXELS = 100_000_000
+
 
 def extract_text(content: bytes) -> str:
     """Decode raw bytes as UTF-8 text.
@@ -28,7 +30,11 @@ def validate_image(content: bytes) -> None:
     """
     try:
         with Image.open(BytesIO(content)) as img:
+            if img.width * img.height > MAX_IMAGE_PIXELS:
+                raise FileProcessingError("Image exceeds safe pixel limit")
             img.verify()
+    except FileProcessingError:
+        raise
     except Exception as exc:
         raise FileProcessingError("Invalid image") from exc
 
@@ -37,17 +43,22 @@ def extract_pdf_text(content: bytes) -> str:
     """Extract all text content from PDF bytes.
 
     Raises:
-        FileProcessingError: if PDF has no extractable text.
+        FileProcessingError: if PDF is malformed or has no extractable text.
     """
-    reader = PdfReader(BytesIO(content))
-    text_parts: list[str] = []
+    try:
+        reader = PdfReader(BytesIO(content))
+        text_parts: list[str] = []
 
-    for page in reader.pages:
-        page_text = page.extract_text()
-        if page_text:
-            text_parts.append(page_text)
+        for page in reader.pages:
+            page_text = page.extract_text()
+            if page_text:
+                text_parts.append(page_text)
+    except FileProcessingError:
+        raise
+    except Exception as exc:
+        raise FileProcessingError("Invalid PDF") from exc
 
-    full_text = "".join(text_parts).strip()
+    full_text = "\n\n".join(text_parts).strip()
 
     if not full_text:
         raise FileProcessingError("PDF has no extractable text")

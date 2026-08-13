@@ -10,26 +10,30 @@ from backend.app.api.schemas.health import HealthResponse
 
 
 @pytest.mark.unit
-def test_success_item_has_empty_error() -> None:
+def test_success_item_has_success_status() -> None:
     item = FileEmbeddingItem(
         filename="report.txt",
         content_type="text/plain",
-        error="",
+        status="success",
+        reason=None,
     )
 
     assert item.filename == "report.txt"
-    assert item.error == ""
+    assert item.status == "success"
+    assert item.reason is None
 
 
 @pytest.mark.unit
-def test_error_item_preserves_safe_message() -> None:
+def test_failed_item_preserves_safe_reason() -> None:
     item = FileEmbeddingItem(
         filename="bad.bin",
         content_type="application/octet-stream",
-        error="Unsupported file type",
+        status="failed",
+        reason="Unsupported file type",
     )
 
-    assert item.error == "Unsupported file type"
+    assert item.status == "failed"
+    assert item.reason == "Unsupported file type"
 
 
 @pytest.mark.unit

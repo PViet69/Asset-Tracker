@@ -8,7 +8,8 @@ class FileEmbeddingItem(BaseModel):
 
     filename: str
     content_type: str = ""
-    error: str = ""
+    status: Literal["success", "failed"] = "success"
+    reason: str | None = None
 
 
 class FileEmbeddingResponse(BaseModel):

@@ -59,7 +59,8 @@ class FileEmbeddingService:
             return FileEmbeddingItem(
                 filename=file.filename,
                 content_type=file.content_type,
-                error=exc.safe_message,
+                status="failed",
+                reason=exc.safe_message,
             )
         except Exception as exc:  # noqa: BLE001
             logger.error(
@@ -70,7 +71,13 @@ class FileEmbeddingService:
             return FileEmbeddingItem(
                 filename=file.filename,
                 content_type=file.content_type,
-                error="Processing failed",
+                status="failed",
+                reason="Processing failed",
             )
 
-        return FileEmbeddingItem(filename=file.filename, content_type=file.content_type)
+        return FileEmbeddingItem(
+            filename=file.filename,
+            content_type=file.content_type,
+            status="success",
+            reason=None,
+        )

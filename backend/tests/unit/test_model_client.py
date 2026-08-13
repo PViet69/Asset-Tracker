@@ -17,17 +17,39 @@ def test_embed_text_returns_embedding_from_sdk_response() -> None:
     sdk.embeddings.create.assert_called_once_with(model="model-a", input="hello")
 
 
-def test_embed_image_sends_base64_data_url() -> None:
+@pytest.mark.parametrize(
+    ("image_bytes", "expected_mime"),
+    [
+        (b"\x89PNG\r\n\x1a\n" + b"png-bytes", "image/png"),
+        (b"\xff\xd8\xff\xe0" + b"jpeg-bytes", "image/jpeg"),
+        (b"RIFF" + b"\x00" * 4 + b"WEBP" + b"webp-bytes", "image/webp"),
+    ],
+)
+def test_embed_image_preserves_detected_image_mime(
+    image_bytes: bytes, expected_mime: str
+) -> None:
     sdk = Mock()
     sdk.embeddings.create.return_value.data = [Mock(embedding=[0.3])]
     client = OpenAICompatibleModelClient.from_client(sdk)
 
-    result = client.embed_image(b"png-bytes", "vision-model")
+    result = client.embed_image(image_bytes, "vision-model")
 
     assert result == [0.3]
     call = sdk.embeddings.create.call_args.kwargs
     assert call["model"] == "vision-model"
-    assert call["input"].startswith("data:image/png;base64,")
+    assert call["input"].startswith(f"data:{expected_mime};base64,")
+
+
+def test_embed_image_defaults_unknown_mime_to_png() -> None:
+    sdk = Mock()
+    sdk.embeddings.create.return_value.data = [Mock(embedding=[0.3])]
+    client = OpenAICompatibleModelClient.from_client(sdk)
+
+    client.embed_image(b"png-bytes", "vision-model")
+
+    assert sdk.embeddings.create.call_args.kwargs["input"].startswith(
+        "data:image/png;base64,"
+    )
 
 
 def test_model_timeout_becomes_safe_domain_error() -> None:

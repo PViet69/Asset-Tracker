@@ -2,14 +2,29 @@
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    Form,
+    HTTPException,
+    Request,
+    UploadFile,
+    status,
+)
 from pydantic import StringConstraints
 
 from backend.app.api.schemas.file_embeddings import FileEmbeddingResponse
 from backend.app.file_embeddings.service import FileEmbeddingService, FileUpload
 from backend.app.file_processing.service import MAX_FILE_SIZE
+from backend.app.security import (
+    MAX_REQUEST_SIZE,
+    reject_oversized_request,
+    require_upload_access,
+)
 
 MAX_FILES = 10
+MAX_AGGREGATE_UPLOAD_SIZE = MAX_REQUEST_SIZE
 
 router = APIRouter()
 
@@ -22,6 +37,12 @@ def get_file_embedding_service() -> FileEmbeddingService:
     if _FILE_EMBEDDING_SERVICE is None:
         raise RuntimeError("File embedding service is not configured")
     return _FILE_EMBEDDING_SERVICE
+
+
+def authorize_upload(request: Request) -> None:
+    """Apply request-size, API-key, and rate-limit controls."""
+    reject_oversized_request(request)
+    require_upload_access(request)
 
 
 @router.post(
@@ -50,8 +71,11 @@ def create_file_embeddings(
             )
 
         uploads: list[FileUpload] = []
+        aggregate_size = 0
         for file in files:
-            content = file.file.read(MAX_FILE_SIZE + 1)
+            remaining = MAX_AGGREGATE_UPLOAD_SIZE - aggregate_size
+            content = file.file.read(min(MAX_FILE_SIZE + 1, remaining + 1))
+            aggregate_size += len(content)
             uploads.append(
                 FileUpload(
                     filename=file.filename or "",
@@ -59,6 +83,11 @@ def create_file_embeddings(
                     content=content,
                 )
             )
+            if aggregate_size > MAX_AGGREGATE_UPLOAD_SIZE:
+                raise HTTPException(
+                    status_code=413,
+                    detail="Request exceeds 250 MB limit",
+                )
 
         return service.process_files(uploads, model)
     finally:

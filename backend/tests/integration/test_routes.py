@@ -22,6 +22,7 @@ from backend.app.integrations.model_client import (
 )
 from backend.app.integrations.qdrant_store import QdrantStore
 from backend.app.main import create_app
+from backend.app.security import MAX_REQUEST_SIZE
 
 
 @dataclass(frozen=True)
@@ -63,8 +64,18 @@ def test_uploads_files_in_order_and_returns_public_response() -> None:
     service = Mock(spec=FileEmbeddingService)
     service.process_files.return_value = FileEmbeddingResponse(
         data=[
-            FileEmbeddingItem(filename="first.txt", content_type="text/plain"),
-            FileEmbeddingItem(filename="second.txt", content_type="text/plain"),
+            FileEmbeddingItem(
+                filename="first.txt",
+                content_type="text/plain",
+                status="success",
+                reason=None,
+            ),
+            FileEmbeddingItem(
+                filename="second.txt",
+                content_type="text/plain",
+                status="success",
+                reason=None,
+            ),
         ]
     )
     app = create_app(service=service)
@@ -83,8 +94,18 @@ def test_uploads_files_in_order_and_returns_public_response() -> None:
     assert response.json() == {
         "object": "list",
         "data": [
-            {"filename": "first.txt", "content_type": "text/plain", "error": ""},
-            {"filename": "second.txt", "content_type": "text/plain", "error": ""},
+            {
+                "filename": "first.txt",
+                "content_type": "text/plain",
+                "status": "success",
+                "reason": None,
+            },
+            {
+                "filename": "second.txt",
+                "content_type": "text/plain",
+                "status": "success",
+                "reason": None,
+            },
         ],
     }
     service.process_files.assert_called_once_with(
@@ -96,6 +117,62 @@ def test_uploads_files_in_order_and_returns_public_response() -> None:
     )
     assert "point_id" not in response.json()
     assert "vector" not in response.json()
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize(
+    "headers",
+    [{}, {"Authorization": "Bearer wrong"}],
+)
+def test_upload_requires_configured_api_key(headers: dict[str, str]) -> None:
+    service = Mock(spec=FileEmbeddingService)
+    app = create_app(service=service, upload_api_key="secret")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/file-embeddings",
+            data={"model": "text-embedding-model"},
+            files=[("files", ("file.txt", b"content", "text/plain"))],
+            headers=headers,
+        )
+
+    assert response.status_code == 401
+    service.process_files.assert_not_called()
+
+
+@pytest.mark.integration
+def test_upload_with_correct_api_key_reaches_service() -> None:
+    service = Mock(spec=FileEmbeddingService)
+    service.process_files.return_value = FileEmbeddingResponse(data=[])
+    app = create_app(service=service, upload_api_key="secret")
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/file-embeddings",
+            data={"model": "text-embedding-model"},
+            files=[("files", ("file.txt", b"content", "text/plain"))],
+            headers={"Authorization": "Bearer secret"},
+        )
+
+    assert response.status_code == 200
+    service.process_files.assert_called_once_with(
+        [FileUpload("file.txt", "text/plain", b"content")],
+        "text-embedding-model",
+    )
+
+
+@pytest.mark.integration
+def test_declared_oversized_content_length_returns_payload_too_large() -> None:
+    service = Mock(spec=FileEmbeddingService)
+    app = create_app(service=service)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/file-embeddings", headers={"Content-Length": str(MAX_REQUEST_SIZE + 1)}
+        )
+
+    assert response.status_code == 413
+    service.process_files.assert_not_called()
 
 
 @pytest.mark.integration
@@ -175,7 +252,8 @@ def test_route_bounds_oversized_upload_read_and_returns_file_error() -> None:
     )
 
     assert response.data[0].filename == "oversized.txt"
-    assert response.data[0].error == "File exceeds 25 MB limit"
+    assert response.data[0].status == "failed"
+    assert response.data[0].reason == "File exceeds 25 MB limit"
     assert file_handle.read_sizes == [MAX_FILE_SIZE + 1]
     assert file_handle.closed
     model_client.embed_text.assert_not_called()
@@ -223,7 +301,8 @@ def test_real_service_reports_empty_file_without_embedding_or_storage() -> None:
         {
             "filename": "empty.txt",
             "content_type": "text/plain",
-            "error": "Empty file",
+            "status": "failed",
+            "reason": "Empty file",
         }
     ]
     model_client.embed_text.assert_not_called()
@@ -256,9 +335,15 @@ def test_real_service_preserves_order_for_oversized_and_valid_files() -> None:
         {
             "filename": "oversized.txt",
             "content_type": "text/plain",
-            "error": "File exceeds 25 MB limit",
+            "status": "failed",
+            "reason": "File exceeds 25 MB limit",
         },
-        {"filename": "valid.txt", "content_type": "text/plain", "error": ""},
+        {
+            "filename": "valid.txt",
+            "content_type": "text/plain",
+            "status": "success",
+            "reason": None,
+        },
     ]
     serialized = response.text
     for forbidden in (
@@ -296,7 +381,8 @@ def test_real_service_returns_safe_model_error_per_file(error_message: str) -> N
         )
 
     assert response.status_code == 200
-    assert response.json()["data"][0]["error"] == error_message
+    assert response.json()["data"][0]["status"] == "failed"
+    assert response.json()["data"][0]["reason"] == error_message
     qdrant_store.store_embedding.assert_not_called()
 
 
@@ -330,7 +416,8 @@ def test_real_service_returns_200_when_all_files_fail_processing() -> None:
             {
                 "filename": "bad.bin",
                 "content_type": "application/octet-stream",
-                "error": "Unsupported file type",
+                "status": "failed",
+                "reason": "Unsupported file type",
             }
         ],
     }
@@ -358,7 +445,8 @@ def test_real_service_returns_safe_qdrant_error_per_file() -> None:
         )
 
     assert response.status_code == 200
-    assert response.json()["data"][0]["error"] == "Qdrant storage failure"
+    assert response.json()["data"][0]["status"] == "failed"
+    assert response.json()["data"][0]["reason"] == "Qdrant storage failure"
     model_client.embed_text.assert_called_once_with(
         "valid text", "text-embedding-model"
     )

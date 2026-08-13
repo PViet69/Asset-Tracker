@@ -32,6 +32,7 @@ uv run uvicorn backend.app.main:create_app --factory --reload
 | `MODEL_ENDPOINT_URL` | Yes | None | OpenAI-compatible embeddings API base URL. |
 | `MODEL_ENDPOINT_API_KEY` | No | Empty | Model endpoint API key. |
 | `MODEL_REQUEST_TIMEOUT` | No | `30` | Model request timeout in seconds. |
+| `UPLOAD_API_KEY` | Yes | None | Bearer key required for file uploads. |
 | `QDRANT_URL` | Yes | None | Qdrant URL. |
 | `QDRANT_API_KEY` | No | Empty | Qdrant API key. |
 | `QDRANT_COLLECTION` | No | `file_embeddings` | Qdrant collection name. |
@@ -59,6 +60,7 @@ When model API runs on Docker Desktop host, set `MODEL_ENDPOINT_URL=http://host.
 
 ```bash
 curl -X POST http://localhost:8000/v1/file-embeddings \
+  -H "Authorization: Bearer $UPLOAD_API_KEY" \
   -F model=text-embedding-3-small \
   -F files=@README.md \
   -F files=@photo.png
@@ -73,18 +75,20 @@ Response contains one result per uploaded file:
     {
       "filename": "README.md",
       "content_type": "text/markdown",
-      "error": ""
+      "status": "success",
+      "reason": null
     },
     {
       "filename": "bad.bin",
       "content_type": "application/octet-stream",
-      "error": "Unsupported file type"
+      "status": "failed",
+      "reason": "Unsupported file type"
     }
   ]
 }
 ```
 
-Public items contain only filename, content type, and safe error text. Embedding vectors, Qdrant point IDs, API keys, tracebacks, and local paths are not returned.
+Public items contain filename, content type, status (`success` or `failed`), and safe reason when failed. Embedding vectors, Qdrant point IDs, API keys, tracebacks, and local paths are not returned.
 
 ### Supported content
 
@@ -100,6 +104,9 @@ Scanned PDFs are unsupported because OCR is out of scope.
 
 - Maximum 10 files per request
 - Maximum 25 MB per file
+- Maximum 250 MB aggregate request body
+- Images exceeding 100 million pixels are rejected
+- Uploads require `Authorization: Bearer $UPLOAD_API_KEY` and are rate-limited to 60 requests per minute per client address
 - Missing files or more than 10 files return HTTP 400
 - Missing or blank `model` returns HTTP 422
 - Empty, oversized, unsupported, invalid, model-failed, or storage-failed files return per-file errors with HTTP 200 when request itself is valid
@@ -120,4 +127,9 @@ Overall status becomes `degraded` when Qdrant or model endpoint reports unavaila
 
 ## Security
 
-Service has no built-in authentication. Deploy only on trusted/private networks, or place behind gateway providing authentication and rate limiting.
+File uploads require `UPLOAD_API_KEY` bearer authentication and use in-memory per-client rate limiting (60 requests/min). Aggregate request bodies are bounded at 250 MB. Compose publishes app and Qdrant ports on loopback by default. Keep services behind trusted/private networks or an authenticated gateway in production.
+
+For production deployments behind a reverse proxy (e.g. Nginx, Traefik, Caddy, or AWS ALB), enforce ingress request body limits (such as Nginx `client_max_body_size 250m;`) to bound chunked uploads before body spooling occurs at the ASGI application server level.
+
+Health checks use low-cost model listing and do not submit embedding requests.
+

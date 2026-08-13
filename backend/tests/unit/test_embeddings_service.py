@@ -55,8 +55,9 @@ def test_processes_text_via_file_processor_and_hides_storage_details() -> None:
     qdrant.store_embedding.assert_called_once_with([0.1, 0.2])
     item = response.data[0]
     assert item.filename == "note.txt"
-    assert item.error == ""
-    assert set(item.model_dump()) == {"filename", "content_type", "error"}
+    assert item.status == "success"
+    assert item.reason is None
+    assert set(item.model_dump()) == {"filename", "content_type", "status", "reason"}
     assert "point-secret" not in str(item.model_dump())
     assert "0.1" not in str(item.model_dump())
 
@@ -79,7 +80,8 @@ def test_real_processing_returns_normal_response_when_all_files_fail() -> None:
             {
                 "filename": "bad.bin",
                 "content_type": "application/octet-stream",
-                "error": "Unsupported file type",
+                "status": "failed",
+                "reason": "Unsupported file type",
             }
         ],
     }
@@ -105,7 +107,8 @@ def test_valid_png_routes_to_image_embedding() -> None:
     model.embed_text.assert_not_called()
     qdrant.store_embedding.assert_called_once_with([0.3])
     assert response.data[0].filename == "photo.png"
-    assert response.data[0].error == ""
+    assert response.data[0].status == "success"
+    assert response.data[0].reason is None
 
 
 @pytest.mark.unit
@@ -129,9 +132,9 @@ def test_model_error_preserves_safe_message_and_continues_in_order() -> None:
         response = service.process_files(uploads, "model-a")
 
     assert [item.filename for item in response.data] == ["bad.txt", "good.txt"]
-    assert [item.error for item in response.data] == [
-        "Model endpoint rejected input",
-        "",
+    assert [(item.status, item.reason) for item in response.data] == [
+        ("failed", "Model endpoint rejected input"),
+        ("success", None),
     ]
     qdrant.store_embedding.assert_called_once_with([0.4])
 
@@ -149,7 +152,8 @@ def test_file_processing_error_returns_safe_message() -> None:
             "model-a",
         )
 
-    assert response.data[0].error == "Unsupported file type"
+    assert response.data[0].status == "failed"
+    assert response.data[0].reason == "Unsupported file type"
 
 
 @pytest.mark.unit
@@ -169,7 +173,8 @@ def test_qdrant_storage_error_returns_safe_message() -> None:
             "model-a",
         )
 
-    assert response.data[0].error == "Qdrant storage failure"
+    assert response.data[0].status == "failed"
+    assert response.data[0].reason == "Qdrant storage failure"
 
 
 @pytest.mark.unit
@@ -190,7 +195,8 @@ def test_unexpected_error_returns_safe_message_and_logs_context_without_content(
             "model-a",
         )
 
-    assert response.data[0].error == "Processing failed"
+    assert response.data[0].status == "failed"
+    assert response.data[0].reason == "Processing failed"
     assert len(caplog.records) == 1
     message = caplog.records[0].getMessage()
     assert filename not in message

@@ -1,0 +1,47 @@
+services:
+  app:
+    build: .
+    ports:
+      - "127.0.0.1:${APP_PORT:-8000}:8000"
+    environment:
+      MODEL_ENDPOINT_URL: "${MODEL_ENDPOINT_URL:?Set MODEL_ENDPOINT_URL in .env}"
+      MODEL_ENDPOINT_API_KEY: "${MODEL_ENDPOINT_API_KEY:-}"
+      MODEL_REQUEST_TIMEOUT: "${MODEL_REQUEST_TIMEOUT:-30}"
+      UPLOAD_API_KEY: "${UPLOAD_API_KEY:?Set UPLOAD_API_KEY in .env}"
+      QDRANT_URL: "http://qdrant:6333"
+      QDRANT_API_KEY: "${QDRANT_API_KEY:-}"
+      QDRANT_COLLECTION: "${QDRANT_COLLECTION:-file_embeddings}"
+      QDRANT_VECTOR_SIZE: "${QDRANT_VECTOR_SIZE:?Set QDRANT_VECTOR_SIZE in .env}"
+      QDRANT_DISTANCE: "${QDRANT_DISTANCE:-Cosine}"
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  qdrant:
+    image: qdrant/qdrant:v1.19.0
+    ports:
+      - "127.0.0.1:${QDRANT_PORT:-6333}:6333"
+    volumes:
+      - qdrant_storage:/qdrant/storage
+    healthcheck:
+      test:
+        - CMD
+        - bash
+        - -c
+        - "bash -euo pipefail -c 'exec 3<>/dev/tcp/localhost/6333; printf \"GET /healthz HTTP/1.1\\r\\nHost: localhost\\r\\nConnection: close\\r\\n\\r\\n\" >&3; grep -q \"200 OK\" <&3'"
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+volumes:
+  qdrant_storage:
