@@ -12,9 +12,10 @@ from fastapi import (
     UploadFile,
     status,
 )
-from pydantic import StringConstraints
 
+from backend.app.api.dependencies import get_file_embedding_service
 from backend.app.api.schemas.file_embeddings import FileEmbeddingResponse
+from backend.app.api.schemas.text_embeddings import EmbeddingModel
 from backend.app.file_embeddings.service import FileEmbeddingService, FileUpload
 from backend.app.file_processing.service import MAX_FILE_SIZE
 from backend.app.security import (
@@ -29,16 +30,6 @@ MAX_AGGREGATE_UPLOAD_SIZE = MAX_REQUEST_SIZE
 router = APIRouter()
 
 
-_FILE_EMBEDDING_SERVICE: FileEmbeddingService | None = None
-
-
-def get_file_embedding_service() -> FileEmbeddingService:
-    """Return the configured file embedding service."""
-    if _FILE_EMBEDDING_SERVICE is None:
-        raise RuntimeError("File embedding service is not configured")
-    return _FILE_EMBEDDING_SERVICE
-
-
 def authorize_upload(request: Request) -> None:
     """Apply request-size, API-key, and rate-limit controls."""
     reject_oversized_request(request)
@@ -51,11 +42,7 @@ def authorize_upload(request: Request) -> None:
     status_code=status.HTTP_200_OK,
 )
 def create_file_embeddings(
-    model: Annotated[
-        str,
-        StringConstraints(strip_whitespace=True, min_length=1),
-        Form(...),
-    ],
+    model: Annotated[EmbeddingModel, Form(...)],
     files: list[UploadFile] | None = File(default=None),
     service: FileEmbeddingService = Depends(get_file_embedding_service),
 ) -> FileEmbeddingResponse:

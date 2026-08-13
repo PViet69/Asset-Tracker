@@ -7,18 +7,17 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.responses import Response
 
-from backend.app.api.routes.file_embeddings import (
-    get_file_embedding_service,
-)
-from backend.app.api.routes.file_embeddings import (
-    router as file_embeddings_router,
-)
+from backend.app.api.dependencies import get_file_embedding_service
+from backend.app.api.routes.file_embeddings import router as file_embeddings_router
 from backend.app.api.routes.health import (
     HealthDependencies,
     get_health_dependencies,
 )
 from backend.app.api.routes.health import (
     router as health_router,
+)
+from backend.app.api.routes.text_embeddings import (
+    router as text_embeddings_router,
 )
 from backend.app.config import Settings
 from backend.app.file_embeddings.service import FileEmbeddingService
@@ -90,6 +89,7 @@ def create_app(
         lifespan=lifespan,
     )
     app.include_router(file_embeddings_router)
+    app.include_router(text_embeddings_router)
     app.include_router(health_router)
 
     @app.middleware("http")
@@ -97,7 +97,8 @@ def create_app(
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
-        if request.url.path == "/v1/file-embeddings" and request.method == "POST":
+        protected_paths = {"/v1/file-embeddings", "/v1/embeddings"}
+        if request.url.path in protected_paths and request.method == "POST":
             try:
                 reject_oversized_request(request)
                 require_upload_access(request)

@@ -90,6 +90,19 @@ Response contains one result per uploaded file:
 
 Public items contain filename, content type, status (`success` or `failed`), and safe reason when failed. Embedding vectors, Qdrant point IDs, API keys, tracebacks, and local paths are not returned.
 
+## Create text embeddings for vector search
+
+`POST /v1/embeddings` accepts OpenAI-compatible JSON and returns query vectors without storing them in Qdrant. Use same model used for uploaded files so vector dimensions and embedding space match.
+
+```bash
+curl -X POST http://localhost:8000/v1/embeddings \
+  -H "Authorization: Bearer $UPLOAD_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"input":"search text","model":"text-embedding-3-small"}'
+```
+
+`input` may be one non-blank string or a non-empty list of non-blank strings. `model` defaults to `text-embedding-3-small` when omitted. Response uses OpenAI-compatible `object`, `data`, `model`, and `usage` fields. `usage` contains zero values because delegated per-text embedding calls do not expose token counts.
+
 ### Supported content
 
 Type detection uses file bytes through `python-magic`; filename extensions do not determine type.

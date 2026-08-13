@@ -17,6 +17,7 @@ class ModelClient(Protocol):
     """Protocol for embedding text and images via an external model."""
 
     def embed_text(self, text: str, model: str) -> list[float]: ...
+    def embed_texts(self, texts: list[str], model: str) -> list[list[float]]: ...
     def embed_image(self, image_bytes: bytes, model: str) -> list[float]: ...
     def check_health(self) -> str: ...
 
@@ -40,8 +41,22 @@ class OpenAICompatibleModelClient:
 
     def embed_text(self, text: str, model: str) -> list[float]:
         """Embed a text string and return the numeric vector."""
+        response = self._create_text_embeddings(text, model)
+        return self._extract_embedding(response)
+
+    def embed_texts(self, texts: list[str], model: str) -> list[list[float]]:
+        """Embed text strings in one request and preserve response order."""
+        response = self._create_text_embeddings(texts, model)
+        return self._extract_embeddings(response, len(texts))
+
+    def _create_text_embeddings(
+        self,
+        input_value: str | list[str],
+        model: str,
+    ) -> object:
+        """Create text embeddings and map SDK errors to domain errors."""
         try:
-            response = self._client.embeddings.create(model=model, input=text)
+            return self._client.embeddings.create(model=model, input=input_value)
         except APITimeoutError:
             logger.error("Model endpoint timed out for text embedding", exc_info=True)
             raise ModelEndpointError("Model endpoint timed out")
@@ -53,8 +68,6 @@ class OpenAICompatibleModelClient:
         except APIError as exc:
             logger.error("Model endpoint rejected text embedding input", exc_info=True)
             raise ModelEndpointError("Model endpoint rejected input") from exc
-
-        return self._extract_embedding(response)
 
     def embed_image(self, image_bytes: bytes, model: str) -> list[float]:
         """Embed image bytes and return the numeric vector.
@@ -92,23 +105,32 @@ class OpenAICompatibleModelClient:
             return "unavailable"
         return "ok"
 
+    @classmethod
+    def _extract_embedding(cls, response: object) -> list[float]:
+        """Validate and extract one embedding vector from the SDK response."""
+        return cls._extract_embeddings(response, 1)[0]
+
     @staticmethod
-    def _extract_embedding(response: object) -> list[float]:
-        """Validate and extract the embedding vector from the SDK response."""
+    def _extract_embeddings(
+        response: object,
+        expected_count: int,
+    ) -> list[list[float]]:
+        """Validate and extract embedding vectors from the SDK response."""
         data = getattr(response, "data", [])
-        if not data or len(data) != 1:
+        if not data or len(data) != expected_count:
             raise ModelEndpointError("Model endpoint returned an invalid embedding")
 
-        embedding = getattr(data[0], "embedding", None)
-        if (
-            not embedding
-            or not isinstance(embedding, list)
-            or len(embedding) == 0
-            or not all(
-                isinstance(value, (int, float)) and not isinstance(value, bool)
-                for value in embedding
-            )
-        ):
-            raise ModelEndpointError("Model endpoint returned an invalid embedding")
-
-        return list(embedding)
+        vectors: list[list[float]] = []
+        for item in data:
+            embedding = getattr(item, "embedding", None)
+            if (
+                not embedding
+                or not isinstance(embedding, list)
+                or not all(
+                    isinstance(value, (int, float)) and not isinstance(value, bool)
+                    for value in embedding
+                )
+            ):
+                raise ModelEndpointError("Model endpoint returned an invalid embedding")
+            vectors.append(list(embedding))
+        return vectors
