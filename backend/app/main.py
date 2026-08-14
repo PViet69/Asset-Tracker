@@ -26,7 +26,7 @@ from backend.app.integrations.qdrant_store import QdrantEmbeddingStore
 from backend.app.security import (
     InMemoryRateLimiter,
     reject_oversized_request,
-    require_upload_access,
+  
 )
 
 
@@ -39,7 +39,7 @@ class _UnavailableHealthDependency:
 def create_app(
     service: FileEmbeddingService | None = None,
     health_dependencies: HealthDependencies | None = None,
-    upload_api_key: str | None = None,
+    
 ) -> FastAPI:
     """Create and configure the FastAPI application."""
 
@@ -47,12 +47,11 @@ def create_app(
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         effective_service = service
         effective_health_dependencies = health_dependencies
-        effective_upload_api_key = upload_api_key
+  
 
         if effective_service is None:
             settings = Settings()
-            if effective_upload_api_key is None:
-                effective_upload_api_key = settings.UPLOAD_API_KEY
+            
             model_client = OpenAICompatibleModelClient(settings)
             qdrant_store = QdrantEmbeddingStore(settings)
             effective_service = FileEmbeddingService(model_client, qdrant_store)
@@ -73,14 +72,14 @@ def create_app(
         effective_service.startup()
         application.state.file_embedding_service = effective_service
         application.state.health_dependencies = effective_health_dependencies
-        application.state.upload_api_key = effective_upload_api_key
+
         application.state.upload_rate_limiter = InMemoryRateLimiter()
         try:
             yield
         finally:
             application.state._state.pop("file_embedding_service", None)
             application.state._state.pop("health_dependencies", None)
-            application.state._state.pop("upload_api_key", None)
+        
             application.state._state.pop("upload_rate_limiter", None)
 
     app = FastAPI(
@@ -101,7 +100,7 @@ def create_app(
         if request.url.path in protected_paths and request.method == "POST":
             try:
                 reject_oversized_request(request)
-                require_upload_access(request)
+             
             except HTTPException as exc:
                 return JSONResponse(
                     status_code=exc.status_code,

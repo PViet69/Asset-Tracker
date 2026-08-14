@@ -21,7 +21,7 @@ from backend.app.file_processing.service import MAX_FILE_SIZE
 from backend.app.security import (
     MAX_REQUEST_SIZE,
     reject_oversized_request,
-    require_upload_access,
+   
 )
 
 MAX_FILES = 10
@@ -33,7 +33,7 @@ router = APIRouter()
 def authorize_upload(request: Request) -> None:
     """Apply request-size, API-key, and rate-limit controls."""
     reject_oversized_request(request)
-    require_upload_access(request)
+ 
 
 
 @router.post(

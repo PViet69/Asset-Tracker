@@ -25,15 +25,12 @@ def create_text_embeddings(
 ) -> TextEmbeddingPublic:
     """Create query embeddings without storing them in Qdrant."""
     try:
-        vectors = service.embed_texts(payload.input, payload.model)
+        vector = service.embed_text(payload.input, payload.model)
     except ModelEndpointError as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=exc.safe_message,
         ) from exc
 
-    data = [
-        TextEmbeddingData(embedding=vector, index=index)
-        for index, vector in enumerate(vectors)
-    ]
+    data = [TextEmbeddingData(embedding=vector, index=0)]
     return TextEmbeddingPublic(data=data, model=payload.model)

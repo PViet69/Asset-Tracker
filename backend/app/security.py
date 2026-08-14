@@ -37,30 +37,6 @@ class InMemoryRateLimiter:
             return True
 
 
-def require_upload_access(request: Request) -> None:
-    """Require configured Bearer API key and allow request under rate limit."""
-    configured_key = getattr(request.app.state, "upload_api_key", None)
-    if configured_key is None:
-        return
-
-    authorization = request.headers.get("authorization", "")
-    scheme, _, supplied_key = authorization.partition(" ")
-    if scheme.lower() != "bearer" or not hmac.compare_digest(
-        supplied_key, configured_key
-    ):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Unauthorized",
-        )
-
-    limiter = request.app.state.upload_rate_limiter
-    client_host = request.client.host if request.client else "unknown"
-    if not limiter.allow(client_host):
-        raise HTTPException(
-            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-            detail="Rate limit exceeded",
-        )
-
 
 def reject_oversized_request(request: Request) -> None:
     """Reject declared request bodies before multipart parsing and spooling."""

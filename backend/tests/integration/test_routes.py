@@ -60,6 +60,40 @@ def test_create_file_embeddings_is_sync_function() -> None:
 
 
 @pytest.mark.integration
+def test_text_embedding_accepts_one_string_and_returns_one_vector() -> None:
+    service = Mock(spec=FileEmbeddingService)
+    service.embed_text.return_value = [0.1, 0.2]
+    app = create_app(service=service)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/embeddings",
+            json={"input": "search text", "model": "ViT-L/14"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["data"] == [
+        {"object": "embedding", "embedding": [0.1, 0.2], "index": 0}
+    ]
+    service.embed_text.assert_called_once_with("search text", "ViT-L/14")
+
+
+@pytest.mark.integration
+def test_text_embedding_rejects_input_list() -> None:
+    service = Mock(spec=FileEmbeddingService)
+    app = create_app(service=service)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/embeddings",
+            json={"input": ["first", "second"], "model": "ViT-L/14"},
+        )
+
+    assert response.status_code == 422
+    service.embed_text.assert_not_called()
+
+
+@pytest.mark.integration
 def test_uploads_files_in_order_and_returns_public_response() -> None:
     service = Mock(spec=FileEmbeddingService)
     service.process_files.return_value = FileEmbeddingResponse(

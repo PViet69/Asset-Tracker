@@ -47,10 +47,9 @@ class FileEmbeddingService:
         """Ensure embedding collection exists."""
         self._qdrant_store.ensure_collection()
 
-    def embed_texts(self, value: str | Sequence[str], model: str) -> list[list[float]]:
-        """Embed query text without storing vectors."""
-        texts = [value] if isinstance(value, str) else list(value)
-        return self._model_client.embed_texts(texts, model)
+    def embed_text(self, text: str, model: str) -> list[float]:
+        """Embed query text without storing vector."""
+        return self._model_client.embed_text(text, model)
 
     def _process_one(self, file: FileUpload, model: str) -> FileEmbeddingItem:
         try:

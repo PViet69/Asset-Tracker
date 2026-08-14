@@ -61,7 +61,7 @@ When model API runs on Docker Desktop host, set `MODEL_ENDPOINT_URL=http://host.
 ```bash
 curl -X POST http://localhost:8000/v1/file-embeddings \
   -H "Authorization: Bearer $UPLOAD_API_KEY" \
-  -F model=text-embedding-3-small \
+  -F model=ViT-L/14 \
   -F files=@README.md \
   -F files=@photo.png
 ```
@@ -98,10 +98,28 @@ Public items contain filename, content type, status (`success` or `failed`), and
 curl -X POST http://localhost:8000/v1/embeddings \
   -H "Authorization: Bearer $UPLOAD_API_KEY" \
   -H "Content-Type: application/json" \
-  -d '{"input":"search text","model":"text-embedding-3-small"}'
+  -d '{"input":"search text","model":"ViT-L/14"}'
 ```
 
-`input` may be one non-blank string or a non-empty list of non-blank strings. `model` defaults to `text-embedding-3-small` when omitted. Response uses OpenAI-compatible `object`, `data`, `model`, and `usage` fields. `usage` contains zero values because delegated per-text embedding calls do not expose token counts.
+`input` must be one non-blank string. Submit one request per text. `model` defaults to `ViT-L/14` when omitted. Response uses OpenAI-compatible `object`, `data`, `model`, and `usage` fields. `usage` contains zero values because delegated embedding calls do not expose token counts.
+
+OpenAI Python client:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8000/v1",
+    api_key="not-needed",
+)
+
+response = client.embeddings.create(
+    input="Your text string goes here",
+    model="ViT-L/14",
+)
+
+print(response.data[0].embedding)
+```
 
 ### Supported content
 

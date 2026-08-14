@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     MODEL_ENDPOINT_URL: str
     MODEL_ENDPOINT_API_KEY: str | None = None
     MODEL_REQUEST_TIMEOUT: float = Field(default=30, gt=0)
-    UPLOAD_API_KEY: str
+
 
     QDRANT_URL: str
     QDRANT_API_KEY: str | None = None

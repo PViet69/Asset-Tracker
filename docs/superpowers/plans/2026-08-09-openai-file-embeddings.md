@@ -1077,7 +1077,7 @@ cp .env.example .env
 docker compose up --build
 curl http://localhost:8000/health
 curl -X POST http://localhost:8000/v1/file-embeddings \\
-  -F model=text-embedding-3-small \\
+  -F model=ViT-L/14 \\
   -F files=@README.md
 ```
 

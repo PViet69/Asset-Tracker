@@ -4,8 +4,7 @@ from typing import Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
-DEFAULT_TEXT_EMBEDDING_MODEL = "text-embedding-3-small"
-MAX_EMBEDDING_INPUTS = 2_048
+DEFAULT_TEXT_EMBEDDING_MODEL = "ViT-L/14"
 MAX_EMBEDDING_TEXT_LENGTH = 8_192
 
 EmbeddingText = Annotated[
@@ -15,10 +14,6 @@ EmbeddingText = Annotated[
         min_length=1,
         max_length=MAX_EMBEDDING_TEXT_LENGTH,
     ),
-]
-EmbeddingInputList = Annotated[
-    list[EmbeddingText],
-    Field(min_length=1, max_length=MAX_EMBEDDING_INPUTS),
 ]
 EmbeddingModel = Annotated[
     str,
@@ -31,7 +26,7 @@ class TextEmbeddingCreate(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    input: EmbeddingText | EmbeddingInputList
+    input: EmbeddingText
     model: EmbeddingModel = DEFAULT_TEXT_EMBEDDING_MODEL
 
 

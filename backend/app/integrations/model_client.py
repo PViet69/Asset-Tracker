@@ -17,7 +17,6 @@ class ModelClient(Protocol):
     """Protocol for embedding text and images via an external model."""
 
     def embed_text(self, text: str, model: str) -> list[float]: ...
-    def embed_texts(self, texts: list[str], model: str) -> list[list[float]]: ...
     def embed_image(self, image_bytes: bytes, model: str) -> list[float]: ...
     def check_health(self) -> str: ...
 
@@ -44,14 +43,9 @@ class OpenAICompatibleModelClient:
         response = self._create_text_embeddings(text, model)
         return self._extract_embedding(response)
 
-    def embed_texts(self, texts: list[str], model: str) -> list[list[float]]:
-        """Embed text strings in one request and preserve response order."""
-        response = self._create_text_embeddings(texts, model)
-        return self._extract_embeddings(response, len(texts))
-
     def _create_text_embeddings(
         self,
-        input_value: str | list[str],
+        input_value: str,
         model: str,
     ) -> object:
         """Create text embeddings and map SDK errors to domain errors."""
