@@ -7,7 +7,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from starlette.responses import Response
 
-from backend.app.api.dependencies import get_file_embedding_service
+from backend.app.api.dependencies import get_file_ingestion_service
 from backend.app.api.routes.file_embeddings import router as file_embeddings_router
 from backend.app.api.routes.health import (
     HealthDependencies,
@@ -20,13 +20,13 @@ from backend.app.api.routes.text_embeddings import (
     router as text_embeddings_router,
 )
 from backend.app.config import Settings
-from backend.app.file_embeddings.service import FileEmbeddingService
+from backend.app.file_embeddings.ingestion_service import FileIngestionService
 from backend.app.integrations.model_client import OpenAICompatibleModelClient
 from backend.app.integrations.qdrant_store import QdrantEmbeddingStore
+from backend.app.model.description_client import InstructorImageDescriptionClient
 from backend.app.security import (
     InMemoryRateLimiter,
     reject_oversized_request,
-  
 )
 
 
@@ -37,9 +37,9 @@ class _UnavailableHealthDependency:
 
 
 def create_app(
-    service: FileEmbeddingService | None = None,
+    service: FileIngestionService | None = None,
     health_dependencies: HealthDependencies | None = None,
-    
+    upload_api_key: str | None = None,
 ) -> FastAPI:
     """Create and configure the FastAPI application."""
 
@@ -47,22 +47,36 @@ def create_app(
     async def lifespan(application: FastAPI) -> AsyncIterator[None]:
         effective_service = service
         effective_health_dependencies = health_dependencies
-  
+        effective_upload_api_key = upload_api_key
 
         if effective_service is None:
             settings = Settings()
-            
+            if effective_upload_api_key is None:
+                effective_upload_api_key = settings.UPLOAD_API_KEY or None
+
+            description_client = InstructorImageDescriptionClient(
+                endpoint_url=settings.DESCRIPTION_ENDPOINT_URL or "",
+                endpoint_api_key=settings.DESCRIPTION_ENDPOINT_API_KEY,
+                description_model=settings.DESCRIPTION_MODEL,
+                timeout=settings.MODEL_REQUEST_TIMEOUT,
+            )
             model_client = OpenAICompatibleModelClient(settings)
             qdrant_store = QdrantEmbeddingStore(settings)
-            effective_service = FileEmbeddingService(model_client, qdrant_store)
+            effective_service = FileIngestionService(
+                description_client=description_client,
+                model_client=model_client,
+                qdrant_store=qdrant_store,
+            )
             if effective_health_dependencies is None:
                 effective_health_dependencies = HealthDependencies(
+                    description_client=description_client,
                     model_client=model_client,
                     qdrant_store=qdrant_store,
                 )
         elif effective_health_dependencies is None:
             unavailable = _UnavailableHealthDependency()
             effective_health_dependencies = HealthDependencies(
+                description_client=unavailable,
                 model_client=unavailable,
                 qdrant_store=unavailable,
             )
@@ -70,16 +84,16 @@ def create_app(
         assert effective_service is not None
         assert effective_health_dependencies is not None
         effective_service.startup()
-        application.state.file_embedding_service = effective_service
+        application.state.file_ingestion_service = effective_service
         application.state.health_dependencies = effective_health_dependencies
-
+        application.state.upload_api_key = effective_upload_api_key
         application.state.upload_rate_limiter = InMemoryRateLimiter()
         try:
             yield
         finally:
-            application.state._state.pop("file_embedding_service", None)
+            application.state._state.pop("file_ingestion_service", None)
             application.state._state.pop("health_dependencies", None)
-        
+            application.state._state.pop("upload_api_key", None)
             application.state._state.pop("upload_rate_limiter", None)
 
     app = FastAPI(
@@ -100,7 +114,6 @@ def create_app(
         if request.url.path in protected_paths and request.method == "POST":
             try:
                 reject_oversized_request(request)
-             
             except HTTPException as exc:
                 return JSONResponse(
                     status_code=exc.status_code,
@@ -109,14 +122,14 @@ def create_app(
                 )
         return await call_next(request)
 
-    def provide_file_embedding_service(request: Request) -> FileEmbeddingService:
-        return request.app.state.file_embedding_service
+    def provide_file_ingestion_service(request: Request) -> FileIngestionService:
+        return request.app.state.file_ingestion_service
 
     def provide_health_dependencies(request: Request) -> HealthDependencies:
         return request.app.state.health_dependencies
 
-    app.dependency_overrides[get_file_embedding_service] = (
-        provide_file_embedding_service
+    app.dependency_overrides[get_file_ingestion_service] = (
+        provide_file_ingestion_service
     )
     app.dependency_overrides[get_health_dependencies] = provide_health_dependencies
     return app

@@ -1,27 +1,27 @@
 """File embedding API routes."""
 
-from typing import Annotated
-
 from fastapi import (
     APIRouter,
     Depends,
     File,
-    Form,
     HTTPException,
     Request,
     UploadFile,
     status,
 )
 
-from backend.app.api.dependencies import get_file_embedding_service
+from backend.app.api.dependencies import get_file_ingestion_service
 from backend.app.api.schemas.file_embeddings import FileEmbeddingResponse
-from backend.app.api.schemas.text_embeddings import EmbeddingModel
-from backend.app.file_embeddings.service import FileEmbeddingService, FileUpload
+from backend.app.exceptions import ModelNotFoundError
+from backend.app.file_embeddings.ingestion_service import (
+    FileIngestionService,
+    FileUpload,
+)
 from backend.app.file_processing.service import MAX_FILE_SIZE
 from backend.app.security import (
     MAX_REQUEST_SIZE,
     reject_oversized_request,
-   
+    require_upload_access,
 )
 
 MAX_FILES = 10
@@ -31,20 +31,20 @@ router = APIRouter()
 
 
 def authorize_upload(request: Request) -> None:
-    """Apply request-size, API-key, and rate-limit controls."""
+    """Apply request-size, authentication, and rate-limit controls."""
     reject_oversized_request(request)
- 
+    require_upload_access(request)
 
 
 @router.post(
     "/v1/file-embeddings",
     response_model=FileEmbeddingResponse,
     status_code=status.HTTP_200_OK,
+    dependencies=[Depends(authorize_upload)],
 )
 def create_file_embeddings(
-    model: Annotated[EmbeddingModel, Form(...)],
     files: list[UploadFile] | None = File(default=None),
-    service: FileEmbeddingService = Depends(get_file_embedding_service),
+    service: FileIngestionService = Depends(get_file_ingestion_service),
 ) -> FileEmbeddingResponse:
     """Create embeddings for uploaded files."""
     if not files:
@@ -76,7 +76,13 @@ def create_file_embeddings(
                     detail="Request exceeds 250 MB limit",
                 )
 
-        return service.process_files(uploads, model)
+        try:
+            return service.process_files(tuple(uploads))
+        except ModelNotFoundError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=exc.safe_message,
+            ) from exc
     finally:
         for file in files:
             file.file.close()

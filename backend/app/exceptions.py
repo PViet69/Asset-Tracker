@@ -37,6 +37,17 @@ class ModelEndpointError(Exception):
         return str(self)
 
 
+class ModelNotFoundError(ModelEndpointError):
+    """Raised when the configured model is not available on the endpoint."""
+
+    def __init__(self, cause: Exception | None = None) -> None:
+        super().__init__("Model not found", cause)
+
+    @property
+    def safe_message(self) -> str:
+        return "Model not found"
+
+
 class QdrantStorageError(Exception):
     """Raised when Qdrant storage operations fail."""
 

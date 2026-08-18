@@ -1,28 +1,27 @@
-"""OpenAI-compatible model adapter for embedding text and image files."""
+"""OpenAI-compatible adapter for configured text embeddings."""
 
-import base64
 import logging
 from typing import Protocol
 
-import magic
-
 from backend.app.config import Settings
-from backend.app.exceptions import ModelEndpointError
-from openai import APIConnectionError, APIError, APITimeoutError, OpenAI
+from backend.app.exceptions import ModelEndpointError, ModelNotFoundError
+from openai import APIConnectionError, APIError, APITimeoutError, NotFoundError, OpenAI
 
 logger = logging.getLogger(__name__)
 
 
 class ModelClient(Protocol):
-    """Protocol for embedding text and images via an external model."""
+    """Boundary for one configured text embedding model."""
 
-    def embed_text(self, text: str, model: str) -> list[float]: ...
-    def embed_image(self, image_bytes: bytes, model: str) -> list[float]: ...
+    @property
+    def model_name(self) -> str: ...
+
+    def embed_text(self, text: str) -> list[float]: ...
     def check_health(self) -> str: ...
 
 
 class OpenAICompatibleModelClient:
-    """ModelClient backed by any OpenAI-compatible HTTP endpoint."""
+    """Text embedding adapter backed by an OpenAI-compatible endpoint."""
 
     def __init__(self, settings: Settings) -> None:
         self._client = OpenAI(
@@ -30,101 +29,70 @@ class OpenAICompatibleModelClient:
             api_key=settings.MODEL_ENDPOINT_API_KEY or "not-needed",
             timeout=settings.MODEL_REQUEST_TIMEOUT,
         )
+        self._embedding_model = settings.EMBEDDING_MODEL
 
     @classmethod
-    def from_client(cls, client: OpenAI) -> "OpenAICompatibleModelClient":
-        """Construct with a pre-built OpenAI client (useful for testing with mocks)."""
+    def from_client(
+        cls,
+        client: OpenAI,
+        embedding_model: str,
+    ) -> "OpenAICompatibleModelClient":
+        """Construct around a pre-built SDK client for isolated tests."""
         instance = cls.__new__(cls)
         instance._client = client
+        instance._embedding_model = embedding_model
         return instance
 
-    def embed_text(self, text: str, model: str) -> list[float]:
-        """Embed a text string and return the numeric vector."""
-        response = self._create_text_embeddings(text, model)
-        return self._extract_embedding(response)
+    @property
+    def model_name(self) -> str:
+        """Return configured embedding model identifier."""
+        return self._embedding_model
 
-    def _create_text_embeddings(
-        self,
-        input_value: str,
-        model: str,
-    ) -> object:
-        """Create text embeddings and map SDK errors to domain errors."""
+    def embed_text(self, text: str) -> list[float]:
+        """Embed text using configured model and return one numeric vector."""
         try:
-            return self._client.embeddings.create(model=model, input=input_value)
-        except APITimeoutError:
-            logger.error("Model endpoint timed out for text embedding", exc_info=True)
-            raise ModelEndpointError("Model endpoint timed out")
-        except APIConnectionError as exc:
-            logger.error(
-                "Model endpoint connection failed for text embedding", exc_info=True
+            response = self._client.embeddings.create(
+                model=self._embedding_model,
+                input=text,
             )
-            raise ModelEndpointError("Model endpoint rejected input") from exc
-        except APIError as exc:
-            logger.error("Model endpoint rejected text embedding input", exc_info=True)
-            raise ModelEndpointError("Model endpoint rejected input") from exc
-
-    def embed_image(self, image_bytes: bytes, model: str) -> list[float]:
-        """Embed image bytes and return the numeric vector.
-
-        Image data is base64-encoded into a data URI using detected MIME type.
-        Unknown image types default to PNG for compatibility.
-        """
-        b64 = base64.b64encode(image_bytes).decode("ascii")
-        mime_type = magic.from_buffer(image_bytes, mime=True)
-        if mime_type not in {"image/jpeg", "image/webp", "image/png"}:
-            mime_type = "image/png"
-        data_url = f"data:{mime_type};base64,{b64}"
-
-        try:
-            response = self._client.embeddings.create(model=model, input=data_url)
-        except APITimeoutError:
-            logger.error("Model endpoint timed out for image embedding", exc_info=True)
-            raise ModelEndpointError("Model endpoint timed out")
-        except APIConnectionError as exc:
-            logger.error(
-                "Model endpoint connection failed for image embedding", exc_info=True
-            )
-            raise ModelEndpointError("Model endpoint rejected input") from exc
-        except APIError as exc:
-            logger.error("Model endpoint rejected image embedding input", exc_info=True)
-            raise ModelEndpointError("Model endpoint rejected input") from exc
-
+        except APITimeoutError as exc:
+            logger.error("Model endpoint timed out during text embedding")
+            raise ModelEndpointError("Model endpoint timed out", exc) from exc
+        except NotFoundError as exc:
+            logger.error("Configured embedding model not found")
+            raise ModelNotFoundError(exc) from exc
+        except (APIConnectionError, APIError) as exc:
+            logger.error("Model endpoint rejected text embedding input")
+            raise ModelEndpointError("Model endpoint rejected input", exc) from exc
         return self._extract_embedding(response)
 
     def check_health(self) -> str:
-        """Return 'ok' if the model endpoint responds, else 'unavailable'."""
+        """Check endpoint liveness and configured model availability."""
         try:
-            self._client.models.list()
+            response = self._client.models.list()
+            model_ids = {
+                item.id
+                for item in getattr(response, "data", ())
+                if isinstance(getattr(item, "id", None), str)
+            }
         except Exception:  # noqa: BLE001
             return "unavailable"
-        return "ok"
-
-    @classmethod
-    def _extract_embedding(cls, response: object) -> list[float]:
-        """Validate and extract one embedding vector from the SDK response."""
-        return cls._extract_embeddings(response, 1)[0]
+        return "ok" if self._embedding_model in model_ids else "unavailable"
 
     @staticmethod
-    def _extract_embeddings(
-        response: object,
-        expected_count: int,
-    ) -> list[list[float]]:
-        """Validate and extract embedding vectors from the SDK response."""
-        data = getattr(response, "data", [])
-        if not data or len(data) != expected_count:
+    def _extract_embedding(response: object) -> list[float]:
+        data = getattr(response, "data", ())
+        if not data or len(data) != 1:
             raise ModelEndpointError("Model endpoint returned an invalid embedding")
 
-        vectors: list[list[float]] = []
-        for item in data:
-            embedding = getattr(item, "embedding", None)
-            if (
-                not embedding
-                or not isinstance(embedding, list)
-                or not all(
-                    isinstance(value, (int, float)) and not isinstance(value, bool)
-                    for value in embedding
-                )
-            ):
-                raise ModelEndpointError("Model endpoint returned an invalid embedding")
-            vectors.append(list(embedding))
-        return vectors
+        embedding = getattr(data[0], "embedding", None)
+        if (
+            not embedding
+            or not isinstance(embedding, list)
+            or not all(
+                isinstance(value, (int, float)) and not isinstance(value, bool)
+                for value in embedding
+            )
+        ):
+            raise ModelEndpointError("Model endpoint returned an invalid embedding")
+        return list(embedding)
