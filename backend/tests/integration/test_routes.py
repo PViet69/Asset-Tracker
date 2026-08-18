@@ -4,37 +4,35 @@ from io import BytesIO
 from unittest.mock import Mock
 
 import pytest
-from fastapi import HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException, UploadFile
 from fastapi.testclient import TestClient
 
+from backend.app.api.dependencies import get_file_ingestion_service
 from backend.app.api.routes.file_embeddings import create_file_embeddings
 from backend.app.api.routes.health import HealthDependencies
 from backend.app.api.schemas.file_embeddings import (
     FileEmbeddingItem,
     FileEmbeddingResponse,
 )
-from backend.app.exceptions import ModelEndpointError, QdrantStorageError
-from backend.app.file_embeddings.service import FileEmbeddingService, FileUpload
-from backend.app.file_processing.service import MAX_FILE_SIZE
-from backend.app.integrations.model_client import (
-    ModelClient,
-    OpenAICompatibleModelClient,
+from backend.app.exceptions import (
+    ModelEndpointError,
+    ModelNotFoundError,
+    QdrantStorageError,
 )
+from backend.app.file_embeddings.ingestion_service import (
+    FileIngestionService,
+    FileUpload,
+)
+from backend.app.file_processing.service import MAX_FILE_SIZE
+from backend.app.integrations.model_client import ModelClient
 from backend.app.integrations.qdrant_store import QdrantStore
 from backend.app.main import create_app
+from backend.app.model.description_client import ImageDescriptionClient
 from backend.app.security import MAX_REQUEST_SIZE
 
 
 @dataclass(frozen=True)
-class _HealthModelClient:
-    status: str
-
-    def check_health(self) -> str:
-        return self.status
-
-
-@dataclass(frozen=True)
-class _HealthQdrantStore:
+class _HealthDependency:
     status: str
 
     def check_health(self) -> str:
@@ -53,6 +51,10 @@ class _BoundedReadFile(BytesIO):
         return super().read(size)
 
 
+def override_ingestion_service(app: FastAPI, service: Mock) -> None:  # noqa: ARG001
+    app.dependency_overrides[get_file_ingestion_service] = lambda: service
+
+
 @pytest.mark.integration
 def test_create_file_embeddings_is_sync_function() -> None:
     """Route handler must be synchronous for sync SDK/Qdrant operations."""
@@ -60,42 +62,40 @@ def test_create_file_embeddings_is_sync_function() -> None:
 
 
 @pytest.mark.integration
-def test_text_embedding_accepts_one_string_and_returns_one_vector() -> None:
-    service = Mock(spec=FileEmbeddingService)
-    service.embed_text.return_value = [0.1, 0.2]
-    app = create_app(service=service)
+def test_upload_uses_configured_ingestion_service_without_model_field(
+    app: FastAPI,
+) -> None:
+    service = Mock(spec=FileIngestionService)
+    service.process_files.return_value = FileEmbeddingResponse(
+        data=[
+            FileEmbeddingItem(
+                filename="note.txt",
+                content_type="text/plain",
+                status="success",
+            )
+        ]
+    )
+    override_ingestion_service(app, service)
 
     with TestClient(app) as client:
         response = client.post(
-            "/v1/embeddings",
-            json={"input": "search text", "model": "ViT-L/14"},
+            "/v1/file-embeddings",
+            files=[("files", ("note.txt", b"hello", "text/plain"))],
         )
 
     assert response.status_code == 200
-    assert response.json()["data"] == [
-        {"object": "embedding", "embedding": [0.1, 0.2], "index": 0}
-    ]
-    service.embed_text.assert_called_once_with("search text", "ViT-L/14")
+    uploads = service.process_files.call_args.args[0]
+    assert len(uploads) == 1
+    assert uploads[0].filename == "note.txt"
+    assert uploads[0].content == b"hello"
+    assert service.process_files.call_args.kwargs == {}
 
 
 @pytest.mark.integration
-def test_text_embedding_rejects_input_list() -> None:
-    service = Mock(spec=FileEmbeddingService)
-    app = create_app(service=service)
-
-    with TestClient(app) as client:
-        response = client.post(
-            "/v1/embeddings",
-            json={"input": ["first", "second"], "model": "ViT-L/14"},
-        )
-
-    assert response.status_code == 422
-    service.embed_text.assert_not_called()
-
-
-@pytest.mark.integration
-def test_uploads_files_in_order_and_returns_public_response() -> None:
-    service = Mock(spec=FileEmbeddingService)
+def test_uploads_files_in_order_and_returns_public_response(
+    app: FastAPI,
+) -> None:
+    service = Mock(spec=FileIngestionService)
     service.process_files.return_value = FileEmbeddingResponse(
         data=[
             FileEmbeddingItem(
@@ -112,12 +112,11 @@ def test_uploads_files_in_order_and_returns_public_response() -> None:
             ),
         ]
     )
-    app = create_app(service=service)
+    override_ingestion_service(app, service)
 
     with TestClient(app) as client:
         response = client.post(
             "/v1/file-embeddings",
-            data={"model": "text-embedding-model"},
             files=[
                 ("files", ("first.txt", b"first content", "text/plain")),
                 ("files", ("second.txt", b"second content", "text/plain")),
@@ -143,14 +142,68 @@ def test_uploads_files_in_order_and_returns_public_response() -> None:
         ],
     }
     service.process_files.assert_called_once_with(
-        [
+        (
             FileUpload("first.txt", "text/plain", b"first content"),
             FileUpload("second.txt", "text/plain", b"second content"),
-        ],
-        "text-embedding-model",
+        ),
     )
     assert "point_id" not in response.json()
     assert "vector" not in response.json()
+
+
+@pytest.mark.integration
+def test_text_embedding_uses_configured_model_and_reports_it(
+    app: FastAPI,
+) -> None:
+    service = Mock(spec=FileIngestionService)
+    service.embedding_model = "embedding-model"
+    service.embed_text.return_value = [0.1, 0.2]
+    override_ingestion_service(app, service)
+
+    with TestClient(app) as client:
+        response = client.post("/v1/embeddings", json={"input": "green eyes"})
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "object": "list",
+        "data": [
+            {
+                "object": "embedding",
+                "embedding": [0.1, 0.2],
+                "index": 0,
+            }
+        ],
+        "model": "embedding-model",
+        "usage": {"prompt_tokens": 0, "total_tokens": 0},
+    }
+    service.embed_text.assert_called_once_with("green eyes")
+
+
+@pytest.mark.integration
+def test_text_embedding_rejects_input_list(app: FastAPI) -> None:
+    service = Mock(spec=FileIngestionService)
+    override_ingestion_service(app, service)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/embeddings",
+            json={"input": ["first", "second"]},
+        )
+
+    assert response.status_code == 422
+    service.embed_text.assert_not_called()
+
+
+@pytest.mark.integration
+def test_openapi_has_no_request_level_model_fields(app: FastAPI) -> None:
+    schema = app.openapi()
+    text_schema = schema["components"]["schemas"]["TextEmbeddingCreate"]
+    upload_parameters = schema["components"]["schemas"][
+        "Body_create_file_embeddings_v1_file_embeddings_post"
+    ]["properties"]
+
+    assert set(text_schema["properties"]) == {"input"}
+    assert set(upload_parameters) == {"files"}
 
 
 @pytest.mark.integration
@@ -158,14 +211,17 @@ def test_uploads_files_in_order_and_returns_public_response() -> None:
     "headers",
     [{}, {"Authorization": "Bearer wrong"}],
 )
-def test_upload_requires_configured_api_key(headers: dict[str, str]) -> None:
-    service = Mock(spec=FileEmbeddingService)
-    app = create_app(service=service, upload_api_key="secret")
+def test_upload_requires_configured_api_key(
+    headers: dict[str, str],
+    app: FastAPI,
+) -> None:
+    service = Mock(spec=FileIngestionService)
+    override_ingestion_service(app, service)
+    app_with_key = create_app(service=service, upload_api_key="secret")
 
-    with TestClient(app) as client:
+    with TestClient(app_with_key) as client:
         response = client.post(
             "/v1/file-embeddings",
-            data={"model": "text-embedding-model"},
             files=[("files", ("file.txt", b"content", "text/plain"))],
             headers=headers,
         )
@@ -175,34 +231,36 @@ def test_upload_requires_configured_api_key(headers: dict[str, str]) -> None:
 
 
 @pytest.mark.integration
-def test_upload_with_correct_api_key_reaches_service() -> None:
-    service = Mock(spec=FileEmbeddingService)
+def test_upload_with_correct_api_key_reaches_service(app: FastAPI) -> None:
+    service = Mock(spec=FileIngestionService)
     service.process_files.return_value = FileEmbeddingResponse(data=[])
-    app = create_app(service=service, upload_api_key="secret")
+    override_ingestion_service(app, service)
+    app_with_key = create_app(service=service, upload_api_key="secret")
 
-    with TestClient(app) as client:
+    with TestClient(app_with_key) as client:
         response = client.post(
             "/v1/file-embeddings",
-            data={"model": "text-embedding-model"},
             files=[("files", ("file.txt", b"content", "text/plain"))],
             headers={"Authorization": "Bearer secret"},
         )
 
     assert response.status_code == 200
     service.process_files.assert_called_once_with(
-        [FileUpload("file.txt", "text/plain", b"content")],
-        "text-embedding-model",
+        (FileUpload("file.txt", "text/plain", b"content"),),
     )
 
 
 @pytest.mark.integration
-def test_declared_oversized_content_length_returns_payload_too_large() -> None:
-    service = Mock(spec=FileEmbeddingService)
-    app = create_app(service=service)
+def test_declared_oversized_content_length_returns_payload_too_large(
+    app: FastAPI,
+) -> None:
+    service = Mock(spec=FileIngestionService)
+    override_ingestion_service(app, service)
 
     with TestClient(app) as client:
         response = client.post(
-            "/v1/file-embeddings", headers={"Content-Length": str(MAX_REQUEST_SIZE + 1)}
+            "/v1/file-embeddings",
+            headers={"Content-Length": str(MAX_REQUEST_SIZE + 1)},
         )
 
     assert response.status_code == 413
@@ -210,15 +268,12 @@ def test_declared_oversized_content_length_returns_payload_too_large() -> None:
 
 
 @pytest.mark.integration
-def test_upload_without_files_returns_bad_request() -> None:
-    service = Mock(spec=FileEmbeddingService)
-    app = create_app(service=service)
+def test_upload_without_files_returns_bad_request(app: FastAPI) -> None:
+    service = Mock(spec=FileIngestionService)
+    override_ingestion_service(app, service)
 
     with TestClient(app) as client:
-        response = client.post(
-            "/v1/file-embeddings",
-            data={"model": "text-embedding-model"},
-        )
+        response = client.post("/v1/file-embeddings")
 
     assert response.status_code == 400
     assert "No files provided" in response.json()["detail"]
@@ -226,9 +281,9 @@ def test_upload_without_files_returns_bad_request() -> None:
 
 
 @pytest.mark.integration
-def test_uploading_more_than_ten_files_returns_bad_request() -> None:
-    service = Mock(spec=FileEmbeddingService)
-    app = create_app(service=service)
+def test_uploading_more_than_ten_files_returns_bad_request(app: FastAPI) -> None:
+    service = Mock(spec=FileIngestionService)
+    override_ingestion_service(app, service)
     files = [
         ("files", (f"file-{index}.txt", b"content", "text/plain"))
         for index in range(11)
@@ -237,7 +292,6 @@ def test_uploading_more_than_ten_files_returns_bad_request() -> None:
     with TestClient(app) as client:
         response = client.post(
             "/v1/file-embeddings",
-            data={"model": "text-embedding-model"},
             files=files,
         )
 
@@ -247,8 +301,11 @@ def test_uploading_more_than_ten_files_returns_bad_request() -> None:
 
 
 @pytest.mark.integration
-def test_route_closes_all_uploads_before_rejecting_more_than_ten() -> None:
-    service = Mock(spec=FileEmbeddingService)
+def test_route_closes_all_uploads_before_rejecting_more_than_ten(
+    app: FastAPI,
+) -> None:
+    service = Mock(spec=FileIngestionService)
+    override_ingestion_service(app, service)
     file_handles = [_BoundedReadFile(b"content") for _ in range(11)]
     uploads = [
         UploadFile(file=handle, filename=f"file-{index}.txt")
@@ -257,7 +314,6 @@ def test_route_closes_all_uploads_before_rejecting_more_than_ten() -> None:
 
     with pytest.raises(HTTPException) as raised:
         create_file_embeddings(
-            model="text-embedding-model",
             files=uploads,
             service=service,
         )
@@ -268,10 +324,13 @@ def test_route_closes_all_uploads_before_rejecting_more_than_ten() -> None:
 
 
 @pytest.mark.integration
-def test_route_bounds_oversized_upload_read_and_returns_file_error() -> None:
+def test_route_bounds_oversized_upload_read_and_returns_file_error(
+    app: FastAPI,
+) -> None:
+    description_client = Mock(spec=ImageDescriptionClient)
     model_client = Mock(spec=ModelClient)
     qdrant_store = Mock(spec=QdrantStore)
-    service = FileEmbeddingService(model_client, qdrant_store)
+    service = FileIngestionService(description_client, model_client, qdrant_store)
     file_handle = _BoundedReadFile(b"x" * (MAX_FILE_SIZE + 1))
     upload = UploadFile(
         file=file_handle,
@@ -280,7 +339,6 @@ def test_route_bounds_oversized_upload_read_and_returns_file_error() -> None:
     )
 
     response = create_file_embeddings(
-        model="text-embedding-model",
         files=[upload],
         service=service,
     )
@@ -290,43 +348,24 @@ def test_route_bounds_oversized_upload_read_and_returns_file_error() -> None:
     assert response.data[0].reason == "File exceeds 25 MB limit"
     assert file_handle.read_sizes == [MAX_FILE_SIZE + 1]
     assert file_handle.closed
+    description_client.describe.assert_not_called()
     model_client.embed_text.assert_not_called()
-    model_client.embed_image.assert_not_called()
     qdrant_store.store_embedding.assert_not_called()
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("model", [None, "", "   "])
-def test_missing_or_blank_model_returns_unprocessable_entity(
-    model: str | None,
+def test_real_service_reports_empty_file_without_embedding_or_storage(
+    app: FastAPI,
 ) -> None:
-    service = Mock(spec=FileEmbeddingService)
-    app = create_app(service=service)
-    files = [("files", ("file.txt", b"content", "text/plain"))]
-    data = {} if model is None else {"model": model}
-
-    with TestClient(app) as client:
-        response = client.post(
-            "/v1/file-embeddings",
-            data=data,
-            files=files,
-        )
-
-    assert response.status_code == 422
-    service.process_files.assert_not_called()
-
-
-@pytest.mark.integration
-def test_real_service_reports_empty_file_without_embedding_or_storage() -> None:
+    description_client = Mock(spec=ImageDescriptionClient)
     model_client = Mock(spec=ModelClient)
     qdrant_store = Mock(spec=QdrantStore)
-    service = FileEmbeddingService(model_client, qdrant_store)
-    app = create_app(service=service)
+    service = FileIngestionService(description_client, model_client, qdrant_store)
+    app_with_service = create_app(service=service)
 
-    with TestClient(app) as client:
+    with TestClient(app_with_service) as client:
         response = client.post(
             "/v1/file-embeddings",
-            data={"model": "text-embedding-model"},
             files=[("files", ("empty.txt", b"", "text/plain"))],
         )
 
@@ -339,25 +378,27 @@ def test_real_service_reports_empty_file_without_embedding_or_storage() -> None:
             "reason": "Empty file",
         }
     ]
+    description_client.describe.assert_not_called()
     model_client.embed_text.assert_not_called()
-    model_client.embed_image.assert_not_called()
     qdrant_store.store_embedding.assert_not_called()
 
 
 @pytest.mark.integration
-def test_real_service_preserves_order_for_oversized_and_valid_files() -> None:
+def test_real_service_preserves_order_for_oversized_and_valid_files(
+    app: FastAPI,
+) -> None:
+    description_client = Mock(spec=ImageDescriptionClient)
     model_client = Mock(spec=ModelClient)
     model_client.embed_text.return_value = [0.123456, -0.654321]
     qdrant_store = Mock(spec=QdrantStore)
     qdrant_store.store_embedding.return_value = "point-secret"
-    service = FileEmbeddingService(model_client, qdrant_store)
-    app = create_app(service=service)
+    service = FileIngestionService(description_client, model_client, qdrant_store)
+    app_with_service = create_app(service=service)
     oversized = b"x" * (25 * 1024 * 1024 + 1)
 
-    with TestClient(app) as client:
+    with TestClient(app_with_service) as client:
         response = client.post(
             "/v1/file-embeddings",
-            data={"model": "text-embedding-model"},
             files=[
                 ("files", ("oversized.txt", oversized, "text/plain")),
                 ("files", ("valid.txt", b"valid text", "text/plain")),
@@ -389,9 +430,7 @@ def test_real_service_preserves_order_for_oversized_and_valid_files() -> None:
         "/Users/narutojaki/private.txt",
     ):
         assert forbidden not in serialized
-    model_client.embed_text.assert_called_once_with(
-        "valid text", "text-embedding-model"
-    )
+    model_client.embed_text.assert_called_once_with("valid text")
     qdrant_store.store_embedding.assert_called_once_with([0.123456, -0.654321])
 
 
@@ -400,17 +439,20 @@ def test_real_service_preserves_order_for_oversized_and_valid_files() -> None:
     "error_message",
     ["Model endpoint timed out", "Model endpoint rejected input"],
 )
-def test_real_service_returns_safe_model_error_per_file(error_message: str) -> None:
+def test_real_service_returns_safe_model_error_per_file(
+    app: FastAPI,
+    error_message: str,
+) -> None:
+    description_client = Mock(spec=ImageDescriptionClient)
     model_client = Mock(spec=ModelClient)
     model_client.embed_text.side_effect = ModelEndpointError(error_message)
     qdrant_store = Mock(spec=QdrantStore)
-    service = FileEmbeddingService(model_client, qdrant_store)
-    app = create_app(service=service)
+    service = FileIngestionService(description_client, model_client, qdrant_store)
+    app_with_service = create_app(service=service)
 
-    with TestClient(app) as client:
+    with TestClient(app_with_service) as client:
         response = client.post(
             "/v1/file-embeddings",
-            data={"model": "text-embedding-model"},
             files=[("files", ("file.txt", b"valid text", "text/plain"))],
         )
 
@@ -421,16 +463,18 @@ def test_real_service_returns_safe_model_error_per_file(error_message: str) -> N
 
 
 @pytest.mark.integration
-def test_real_service_returns_200_when_all_files_fail_processing() -> None:
+def test_real_service_returns_200_when_all_files_fail_processing(
+    app: FastAPI,
+) -> None:
+    description_client = Mock(spec=ImageDescriptionClient)
     model_client = Mock(spec=ModelClient)
     qdrant_store = Mock(spec=QdrantStore)
-    service = FileEmbeddingService(model_client, qdrant_store)
-    app = create_app(service=service)
+    service = FileIngestionService(description_client, model_client, qdrant_store)
+    app_with_service = create_app(service=service)
 
-    with TestClient(app) as client:
+    with TestClient(app_with_service) as client:
         response = client.post(
             "/v1/file-embeddings",
-            data={"model": "model-a"},
             files=[
                 (
                     "files",
@@ -455,117 +499,152 @@ def test_real_service_returns_200_when_all_files_fail_processing() -> None:
             }
         ],
     }
+    description_client.describe.assert_not_called()
     model_client.embed_text.assert_not_called()
-    model_client.embed_image.assert_not_called()
     qdrant_store.store_embedding.assert_not_called()
 
 
 @pytest.mark.integration
-def test_real_service_returns_safe_qdrant_error_per_file() -> None:
+def test_real_service_returns_safe_qdrant_error_per_file(
+    app: FastAPI,
+) -> None:
+    description_client = Mock(spec=ImageDescriptionClient)
     model_client = Mock(spec=ModelClient)
     model_client.embed_text.return_value = [0.1, 0.2]
     qdrant_store = Mock(spec=QdrantStore)
     qdrant_store.store_embedding.side_effect = QdrantStorageError(
         "Qdrant storage failure"
     )
-    service = FileEmbeddingService(model_client, qdrant_store)
-    app = create_app(service=service)
+    service = FileIngestionService(description_client, model_client, qdrant_store)
+    app_with_service = create_app(service=service)
 
-    with TestClient(app) as client:
+    with TestClient(app_with_service) as client:
         response = client.post(
             "/v1/file-embeddings",
-            data={"model": "text-embedding-model"},
             files=[("files", ("file.txt", b"valid text", "text/plain"))],
         )
 
     assert response.status_code == 200
     assert response.json()["data"][0]["status"] == "failed"
     assert response.json()["data"][0]["reason"] == "Qdrant storage failure"
-    model_client.embed_text.assert_called_once_with(
-        "valid text", "text-embedding-model"
-    )
+    model_client.embed_text.assert_called_once_with("valid text")
     qdrant_store.store_embedding.assert_called_once_with([0.1, 0.2])
 
 
 @pytest.mark.integration
-def test_health_uses_model_listing_for_openai_compatible_client() -> None:
-    service = Mock(spec=FileEmbeddingService)
-    sdk = Mock()
-    model_client = OpenAICompatibleModelClient.from_client(sdk)
+def test_health_is_ok_when_both_models_and_qdrant_are_available(
+    app: FastAPI,
+) -> None:
+    service = Mock(spec=FileIngestionService)
     dependencies = HealthDependencies(
-        model_client=model_client,
-        qdrant_store=_HealthQdrantStore("ok"),
+        description_client=_HealthDependency("ok"),
+        model_client=_HealthDependency("ok"),
+        qdrant_store=_HealthDependency("ok"),
     )
-    app = create_app(service=service, health_dependencies=dependencies)
+    app_with_deps = create_app(service=service, health_dependencies=dependencies)
 
-    with TestClient(app) as client:
+    with TestClient(app_with_deps) as client:
         response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "qdrant": "ok", "model": "ok"}
-    sdk.models.list.assert_called_once_with()
-
-
-@pytest.mark.integration
-def test_health_is_ok_when_both_dependencies_are_available() -> None:
-    service = Mock(spec=FileEmbeddingService)
-    dependencies = HealthDependencies(
-        model_client=_HealthModelClient("ok"),
-        qdrant_store=_HealthQdrantStore("ok"),
-    )
-    app = create_app(service=service, health_dependencies=dependencies)
-
-    with TestClient(app) as client:
-        response = client.get("/health")
-
-    assert response.status_code == 200
-    assert response.json() == {"status": "ok", "qdrant": "ok", "model": "ok"}
+    assert response.json() == {
+        "status": "ok",
+        "qdrant": "ok",
+        "model": "ok",
+    }
 
 
 @pytest.mark.integration
 @pytest.mark.parametrize(
-    ("model_status", "qdrant_status"),
-    [("unavailable", "ok"), ("ok", "unavailable"), ("unavailable", "unavailable")],
+    ("description_status", "embedding_status", "qdrant_status"),
+    [
+        ("unavailable", "ok", "ok"),
+        ("ok", "unavailable", "ok"),
+        ("ok", "ok", "unavailable"),
+        ("unavailable", "unavailable", "unavailable"),
+    ],
 )
-def test_health_is_degraded_when_dependency_is_unavailable(
-    model_status: str,
+def test_health_is_degraded_when_any_dependency_is_unavailable(
+    app: FastAPI,
+    description_status: str,
+    embedding_status: str,
     qdrant_status: str,
 ) -> None:
-    service = Mock(spec=FileEmbeddingService)
+    service = Mock(spec=FileIngestionService)
     dependencies = HealthDependencies(
-        model_client=_HealthModelClient(model_status),
-        qdrant_store=_HealthQdrantStore(qdrant_status),
+        description_client=_HealthDependency(description_status),
+        model_client=_HealthDependency(embedding_status),
+        qdrant_store=_HealthDependency(qdrant_status),
     )
-    app = create_app(service=service, health_dependencies=dependencies)
+    app_with_deps = create_app(service=service, health_dependencies=dependencies)
 
-    with TestClient(app) as client:
+    with TestClient(app_with_deps) as client:
         response = client.get("/health")
 
     assert response.status_code == 200
-    assert response.json()["status"] == "degraded"
-    assert response.json()["model"] == model_status
-    assert response.json()["qdrant"] == qdrant_status
+    assert response.json() == {
+        "status": "degraded",
+        "qdrant": qdrant_status,
+        "model": "unavailable"
+        if "unavailable" in (description_status, embedding_status)
+        else "ok",
+    }
 
 
 @pytest.mark.integration
-def test_injected_service_starts_once_on_testclient_lifespan() -> None:
-    service = Mock(spec=FileEmbeddingService)
-    app = create_app(service=service)
+def test_injected_service_starts_once_on_testclient_lifespan(
+    app: FastAPI,
+) -> None:
+    service = Mock(spec=FileIngestionService)
 
-    with TestClient(app):
+    with TestClient(create_app(service=service)):
         service.startup.assert_called_once_with()
 
 
 @pytest.mark.integration
 def test_qdrant_startup_error_surfaces_on_testclient_entry() -> None:
+    description_client = Mock(spec=ImageDescriptionClient)
     model_client = Mock(spec=ModelClient)
     qdrant_store = Mock(spec=QdrantStore)
     qdrant_store.ensure_collection.side_effect = QdrantStorageError(
         "Qdrant storage failure"
     )
-    service = FileEmbeddingService(model_client, qdrant_store)
+    service = FileIngestionService(description_client, model_client, qdrant_store)
     app = create_app(service=service)
 
     with pytest.raises(QdrantStorageError, match="Qdrant storage failure"):
         with TestClient(app):
             pass
+
+
+@pytest.mark.integration
+def test_text_embedding_returns_503_when_model_not_found(
+    app: FastAPI,
+) -> None:
+    service = Mock(spec=FileIngestionService)
+    service.embed_text.side_effect = ModelNotFoundError()
+    override_ingestion_service(app, service)
+
+    with TestClient(app) as client:
+        response = client.post("/v1/embeddings", json={"input": "hello"})
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Model not found"}
+
+
+@pytest.mark.integration
+def test_file_upload_returns_503_when_model_not_found(
+    app: FastAPI,
+) -> None:
+    service = Mock(spec=FileIngestionService)
+    service.process_files.side_effect = ModelNotFoundError()
+    override_ingestion_service(app, service)
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/v1/file-embeddings",
+            files=[("files", ("file.txt", b"content", "text/plain"))],
+        )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Model not found"}

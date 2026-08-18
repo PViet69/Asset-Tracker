@@ -13,14 +13,67 @@ COLLECTION = "configured_embeddings"
 
 
 @pytest.mark.unit
-def test_settings_require_model_and_qdrant_urls(
+@pytest.mark.parametrize(
+    "missing_field",
+    ["MODEL_ENDPOINT_URL", "DESCRIPTION_MODEL", "EMBEDDING_MODEL", "QDRANT_URL"],
+)
+def test_settings_require_model_names_and_service_urls(
+    missing_field: str,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.delenv("MODEL_ENDPOINT_URL", raising=False)
-    monkeypatch.delenv("QDRANT_URL", raising=False)
+    monkeypatch.delenv(missing_field, raising=False)
+    values = {
+        "MODEL_ENDPOINT_URL": "https://model.example/v1",
+        "DESCRIPTION_MODEL": "vision-model",
+        "EMBEDDING_MODEL": "embedding-model",
+        "QDRANT_URL": "https://qdrant.example",
+        "QDRANT_VECTOR_SIZE": 2,
+    }
+    values.pop(missing_field)
 
     with pytest.raises(ValidationError):
-        Settings(_env_file=None, QDRANT_VECTOR_SIZE=2)
+        Settings(_env_file=None, **values)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("field", ["DESCRIPTION_MODEL", "EMBEDDING_MODEL"])
+def test_settings_reject_blank_model_names(field: str) -> None:
+    values = {
+        "MODEL_ENDPOINT_URL": "https://model.example/v1",
+        "DESCRIPTION_MODEL": "vision-model",
+        "DESCRIPTION_ENDPOINT_URL": "https://vision.example/v1",
+        "DESCRIPTION_ENDPOINT_API_KEY": "vision-key",
+        "EMBEDDING_MODEL": "embedding-model",
+        "QDRANT_URL": "https://qdrant.example",
+        "QDRANT_VECTOR_SIZE": 2,
+        field: "   ",
+    }
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **values)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "missing_field",
+    ["DESCRIPTION_ENDPOINT_URL", "DESCRIPTION_ENDPOINT_API_KEY"],
+)
+def test_settings_require_description_endpoint_when_description_model_set(
+    missing_field: str,
+) -> None:
+    values = {
+        "MODEL_ENDPOINT_URL": "https://model.example/v1",
+        "DESCRIPTION_MODEL": "vision-model",
+        "DESCRIPTION_ENDPOINT_URL": "https://vision.example/v1",
+        "DESCRIPTION_ENDPOINT_API_KEY": "vision-key",
+        "EMBEDDING_MODEL": "embedding-model",
+        "QDRANT_URL": "https://qdrant.example",
+        "QDRANT_VECTOR_SIZE": 2,
+    }
+    values.pop(missing_field)
+
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, **values)
 
 
 @pytest.mark.unit
@@ -28,6 +81,10 @@ def test_constructs_client_once_from_settings() -> None:
     settings = Settings(
         MODEL_ENDPOINT_URL="https://model.example",
         UPLOAD_API_KEY="upload-secret",
+        DESCRIPTION_MODEL="vision-model",
+        DESCRIPTION_ENDPOINT_URL="https://vision.example",
+        DESCRIPTION_ENDPOINT_API_KEY="vision-key",
+        EMBEDDING_MODEL="embedding-model",
         QDRANT_URL="https://qdrant.example",
         QDRANT_API_KEY="secret-key",
         QDRANT_COLLECTION=COLLECTION,
@@ -69,6 +126,10 @@ def test_ensure_collection_uses_configured_distance() -> None:
     settings = Settings(
         MODEL_ENDPOINT_URL="https://model.example",
         UPLOAD_API_KEY="upload-secret",
+        DESCRIPTION_MODEL="vision-model",
+        DESCRIPTION_ENDPOINT_URL="https://vision.example",
+        DESCRIPTION_ENDPOINT_API_KEY="vision-key",
+        EMBEDDING_MODEL="embedding-model",
         QDRANT_URL="https://qdrant.example",
         QDRANT_COLLECTION=COLLECTION,
         QDRANT_VECTOR_SIZE=2,

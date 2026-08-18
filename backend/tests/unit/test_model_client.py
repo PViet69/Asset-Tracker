@@ -3,148 +3,134 @@ from unittest.mock import Mock
 import httpx
 import pytest
 
-from backend.app.exceptions import ModelEndpointError
+from backend.app.exceptions import ModelEndpointError, ModelNotFoundError
 from backend.app.integrations.model_client import OpenAICompatibleModelClient
-from openai import APIConnectionError, APIError, APITimeoutError
+from openai import APIConnectionError, APIError, APITimeoutError, NotFoundError
 
 
-def test_embed_text_returns_embedding_from_sdk_response() -> None:
-    sdk = Mock()
-    sdk.embeddings.create.return_value.data = [Mock(embedding=[0.1, 0.2])]
-    client = OpenAICompatibleModelClient.from_client(sdk)
-
-    assert client.embed_text("hello", "model-a") == [0.1, 0.2]
-    sdk.embeddings.create.assert_called_once_with(model="model-a", input="hello")
-
-
-@pytest.mark.parametrize(
-    ("image_bytes", "expected_mime"),
-    [
-        (b"\x89PNG\r\n\x1a\n" + b"png-bytes", "image/png"),
-        (b"\xff\xd8\xff\xe0" + b"jpeg-bytes", "image/jpeg"),
-        (b"RIFF" + b"\x00" * 4 + b"WEBP" + b"webp-bytes", "image/webp"),
-    ],
-)
-def test_embed_image_preserves_detected_image_mime(
-    image_bytes: bytes, expected_mime: str
-) -> None:
-    sdk = Mock()
-    sdk.embeddings.create.return_value.data = [Mock(embedding=[0.3])]
-    client = OpenAICompatibleModelClient.from_client(sdk)
-
-    result = client.embed_image(image_bytes, "vision-model")
-
-    assert result == [0.3]
-    call = sdk.embeddings.create.call_args.kwargs
-    assert call["model"] == "vision-model"
-    assert call["input"].startswith(f"data:{expected_mime};base64,")
-
-
-def test_embed_image_defaults_unknown_mime_to_png() -> None:
-    sdk = Mock()
-    sdk.embeddings.create.return_value.data = [Mock(embedding=[0.3])]
-    client = OpenAICompatibleModelClient.from_client(sdk)
-
-    client.embed_image(b"png-bytes", "vision-model")
-
-    assert sdk.embeddings.create.call_args.kwargs["input"].startswith(
-        "data:image/png;base64,"
+def make_client(sdk: Mock) -> OpenAICompatibleModelClient:
+    return OpenAICompatibleModelClient.from_client(
+        sdk,
+        embedding_model="embedding-model",
     )
 
 
+@pytest.mark.unit
+def test_embed_text_uses_configured_model_and_returns_vector() -> None:
+    sdk = Mock()
+    sdk.embeddings.create.return_value.data = [Mock(embedding=[0.1, 0.2])]
+    client = make_client(sdk)
+
+    assert client.embed_text("hello") == [0.1, 0.2]
+    assert client.model_name == "embedding-model"
+    sdk.embeddings.create.assert_called_once_with(
+        model="embedding-model",
+        input="hello",
+    )
+
+
+@pytest.mark.unit
 def test_model_timeout_becomes_safe_domain_error() -> None:
     sdk = Mock()
     sdk.embeddings.create.side_effect = APITimeoutError(
         request=httpx.Request("POST", "https://model.example/embeddings")
     )
-    client = OpenAICompatibleModelClient.from_client(sdk)
+    client = make_client(sdk)
 
     with pytest.raises(ModelEndpointError) as exc_info:
-        client.embed_text("hello", "model-a")
+        client.embed_text("hello")
 
-    assert str(exc_info.value) == "Model endpoint timed out"
+    assert exc_info.value.safe_message == "Model endpoint timed out"
 
 
-def test_model_api_error_becomes_safe_domain_error() -> None:
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "error",
+    [
+        APIConnectionError(
+            request=httpx.Request("POST", "https://model.example/embeddings")
+        ),
+        APIError(
+            "secret provider detail",
+            request=httpx.Request("POST", "https://model.example/embeddings"),
+            body=None,
+        ),
+    ],
+)
+def test_model_endpoint_error_becomes_safe_domain_error(error: Exception) -> None:
     sdk = Mock()
-    sdk.embeddings.create.side_effect = APIError(
-        "secret provider detail",
-        request=httpx.Request("POST", "https://model.example/embeddings"),
-        body=None,
-    )
-    client = OpenAICompatibleModelClient.from_client(sdk)
+    sdk.embeddings.create.side_effect = error
+    client = make_client(sdk)
 
     with pytest.raises(ModelEndpointError) as exc_info:
-        client.embed_text("hello", "model-a")
+        client.embed_text("hello")
 
-    assert str(exc_info.value) == "Model endpoint rejected input"
-    assert "secret provider detail" not in str(exc_info.value)
+    assert exc_info.value.safe_message == "Model endpoint rejected input"
+    assert "secret provider detail" not in exc_info.value.safe_message
 
 
-def test_embed_text_empty_embedding_raises() -> None:
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    "data",
+    [
+        [],
+        [Mock(embedding=[])],
+        [Mock(embedding=["not-numeric"])],
+        [Mock(embedding=[True])],
+    ],
+)
+def test_embed_text_rejects_invalid_embedding(data: list[object]) -> None:
     sdk = Mock()
-    sdk.embeddings.create.return_value.data = [Mock(embedding=[])]
-    client = OpenAICompatibleModelClient.from_client(sdk)
+    sdk.embeddings.create.return_value.data = data
+    client = make_client(sdk)
 
     with pytest.raises(ModelEndpointError, match="invalid embedding"):
-        client.embed_text("hello", "model-a")
+        client.embed_text("hello")
 
 
-def test_embed_text_no_items_raises() -> None:
+@pytest.mark.unit
+def test_embedding_health_is_ok_when_configured_model_exists() -> None:
     sdk = Mock()
-    sdk.embeddings.create.return_value.data = []
-    client = OpenAICompatibleModelClient.from_client(sdk)
-
-    with pytest.raises(ModelEndpointError, match="invalid embedding"):
-        client.embed_text("hello", "model-a")
-
-
-@pytest.mark.parametrize("embedding", [["not-numeric"], [True]])
-def test_embed_text_non_numeric_embedding_raises(embedding: list[object]) -> None:
-    sdk = Mock()
-    sdk.embeddings.create.return_value.data = [Mock(embedding=embedding)]
-    client = OpenAICompatibleModelClient.from_client(sdk)
-
-    with pytest.raises(ModelEndpointError, match="invalid embedding"):
-        client.embed_text("hello", "model-a")
-
-
-def test_embed_image_timeout_raises() -> None:
-    sdk = Mock()
-    sdk.embeddings.create.side_effect = APITimeoutError(
-        request=httpx.Request("POST", "https://model.example/embeddings")
-    )
-    client = OpenAICompatibleModelClient.from_client(sdk)
-
-    with pytest.raises(ModelEndpointError) as exc_info:
-        client.embed_image(b"img", "model-b")
-
-    assert str(exc_info.value) == "Model endpoint timed out"
-
-
-def test_embed_image_connection_error_raises() -> None:
-    sdk = Mock()
-    sdk.embeddings.create.side_effect = APIConnectionError(
-        request=httpx.Request("POST", "https://model.example/embeddings")
-    )
-    client = OpenAICompatibleModelClient.from_client(sdk)
-
-    with pytest.raises(ModelEndpointError, match="^Model endpoint rejected input$"):
-        client.embed_image(b"img", "model-b")
-
-
-def test_check_health_ok() -> None:
-    sdk = Mock()
-    client = OpenAICompatibleModelClient.from_client(sdk)
+    sdk.models.list.return_value.data = [Mock(id="embedding-model")]
+    client = make_client(sdk)
 
     assert client.check_health() == "ok"
     sdk.models.list.assert_called_once_with()
 
 
-def test_check_health_unavailable() -> None:
+@pytest.mark.unit
+def test_embedding_health_is_unavailable_when_model_is_absent() -> None:
     sdk = Mock()
-    sdk.models.list.side_effect = ConnectionError()
-    client = OpenAICompatibleModelClient.from_client(sdk)
+    sdk.models.list.return_value.data = [Mock(id="another-model")]
+    client = make_client(sdk)
 
     assert client.check_health() == "unavailable"
-    sdk.models.list.assert_called_once_with()
+
+
+@pytest.mark.unit
+def test_embedding_health_is_unavailable_when_listing_fails() -> None:
+    sdk = Mock()
+    sdk.models.list.side_effect = ConnectionError()
+    client = make_client(sdk)
+
+    assert client.check_health() == "unavailable"
+
+
+@pytest.mark.unit
+def test_embed_text_not_found_becomes_model_not_found_error() -> None:
+    sdk = Mock()
+    sdk.embeddings.create.side_effect = NotFoundError(
+        "secret model detail",
+        response=httpx.Response(
+            status_code=404,
+            request=httpx.Request("POST", "https://model.example/embeddings"),
+        ),
+        body=None,
+    )
+    client = make_client(sdk)
+
+    with pytest.raises(ModelNotFoundError) as exc_info:
+        client.embed_text("hello")
+
+    assert exc_info.value.safe_message == "Model not found"
+    assert "secret model detail" not in exc_info.value.safe_message

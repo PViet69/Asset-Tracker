@@ -28,6 +28,18 @@ def test_compose_uses_safe_reproducible_qdrant_defaults() -> None:
     assert "/healthz" in " ".join(qdrant["healthcheck"]["test"])
 
 
+def test_compose_requires_description_and_embedding_models() -> None:
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
+    environment = compose["services"]["app"]["environment"]
+
+    assert environment["DESCRIPTION_MODEL"] == (
+        "${DESCRIPTION_MODEL:?Set DESCRIPTION_MODEL in .env}"
+    )
+    assert environment["EMBEDDING_MODEL"] == (
+        "${EMBEDDING_MODEL:?Set EMBEDDING_MODEL in .env}"
+    )
+
+
 def test_example_model_url_is_reachable_from_docker_desktop() -> None:
     env_example = (ROOT / ".env.example").read_text()
 

@@ -1,0 +1,72 @@
+import pytest
+from pydantic import ValidationError
+
+from backend.app.model.prompt_model import ImageDescription
+
+
+def make_description(**changes: object) -> ImageDescription:
+    values: dict[str, object] = {
+        "summary": "Portrait of a young woman outdoors.",
+        "subjects": ("young woman",),
+        "attributes": ("green eyes", "long dark hair"),
+        "actions": ("looking at camera",),
+        "setting": ("outdoors", "blurred foliage background"),
+        "colors": ("green", "black"),
+        "style": ("portrait photography", "soft natural light"),
+        "visible_text": (),
+        "search_keywords": ("woman", "green eyes", "outdoor portrait"),
+    }
+    return ImageDescription(**(values | changes))
+
+
+@pytest.mark.unit
+def test_formats_description_in_stable_field_order() -> None:
+    description = make_description()
+
+    assert description.to_embedding_text() == "\n".join(
+        (
+            "Summary: Portrait of a young woman outdoors.",
+            "Subjects: young woman",
+            "Attributes: green eyes, long dark hair",
+            "Actions: looking at camera",
+            "Setting: outdoors, blurred foliage background",
+            "Colors: green, black",
+            "Style: portrait photography, soft natural light",
+            "Search keywords: woman, green eyes, outdoor portrait",
+        )
+    )
+
+
+@pytest.mark.unit
+def test_omits_empty_collection_fields() -> None:
+    description = make_description(
+        actions=(),
+        colors=(),
+        visible_text=(),
+        search_keywords=(),
+    )
+
+    formatted = description.to_embedding_text()
+
+    assert "Actions:" not in formatted
+    assert "Colors:" not in formatted
+    assert "Visible text:" not in formatted
+    assert "Search keywords:" not in formatted
+
+
+@pytest.mark.unit
+def test_description_is_frozen() -> None:
+    description = make_description()
+
+    with pytest.raises(ValidationError):
+        description.summary = "Changed"  # type: ignore[misc]
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("summary", "   "), ("subjects", ("woman", "   "))],
+)
+def test_rejects_blank_description_values(field: str, value: object) -> None:
+    with pytest.raises(ValidationError):
+        make_description(**{field: value})
