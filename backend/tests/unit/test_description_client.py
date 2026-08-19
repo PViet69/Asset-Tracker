@@ -14,7 +14,6 @@ from openai import APITimeoutError, BadRequestError
 
 def make_description() -> ImageDescription:
     return ImageDescription(
-        summary="A green-eyed woman outdoors.",
         subjects=("woman",),
         attributes=("green eyes",),
         actions=("looking at camera",),
@@ -22,7 +21,6 @@ def make_description() -> ImageDescription:
         colors=("green",),
         style=("portrait photography",),
         visible_text=(),
-        search_keywords=("green-eyed woman", "outdoor portrait"),
     )
 
 

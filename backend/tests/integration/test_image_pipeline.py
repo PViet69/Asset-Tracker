@@ -73,10 +73,9 @@ def test_real_image_description_produces_validated_structured_output(
     description = client.describe(small_png_bytes)
 
     assert isinstance(description, ImageDescription)
-    assert description.summary
-    assert description.search_keywords
+
     text = description.to_embedding_text()
-    assert text.startswith(f"Summary: {description.summary}")
+    assert text.startswith("Subjects:")
     assert "Search keywords:" in text
 
 

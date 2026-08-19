@@ -28,7 +28,6 @@ def _normalize(vector: list[float]) -> list[float]:
 
 def _description() -> ImageDescription:
     return ImageDescription(
-        summary="A small green square test image.",
         subjects=("square",),
         attributes=("green",),
         actions=("static",),
@@ -36,7 +35,6 @@ def _description() -> ImageDescription:
         colors=("green",),
         style=("pixel art",),
         visible_text=(),
-        search_keywords=("green square",),
     )
 
 
@@ -81,6 +79,7 @@ def test_end_to_end_image_pipeline_embeds_description_and_stores_vector() -> Non
                     ),
                 )
             ],
+            data={"file_path": ["small.png"]},
         )
 
     assert response.status_code == 200
@@ -105,7 +104,12 @@ def test_end_to_end_image_pipeline_embeds_description_and_stores_vector() -> Non
     assert _normalize(points[0].vector) == pytest.approx(
         _normalize([0.11, 0.22, 0.33]), rel=1e-3
     )
-    assert points[0].payload in (None, {})
+    assert points[0].payload == {
+        "filename": "small.png",
+        "file_path": "small.png",
+        "file_type": "image/png",
+        "content": expected_text,
+    }
 
 
 @pytest.mark.integration
