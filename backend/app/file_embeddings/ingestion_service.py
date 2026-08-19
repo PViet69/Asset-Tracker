@@ -8,16 +8,22 @@ from backend.app.api.schemas.file_embeddings import (
     FileEmbeddingItem,
     FileEmbeddingResponse,
 )
+from backend.app.api.schemas.vector_search import (
+    VectorSearchItem,
+    VectorSearchResponse,
+)
+from backend.app.config import Settings
 from backend.app.exceptions import (
     FileProcessingError,
     ModelEndpointError,
     ModelNotFoundError,
     QdrantStorageError,
+    SettingsError,
 )
 from backend.app.file_processing.service import process_file
 from backend.app.file_processing.types import ProcessedInput
 from backend.app.integrations.model_client import ModelClient
-from backend.app.integrations.qdrant_store import QdrantStore
+from backend.app.integrations.qdrant_store import QdrantStore, SearchHit
 from backend.app.model.description_client import ImageDescriptionClient
 
 logger = logging.getLogger(__name__)
@@ -30,20 +36,23 @@ class FileUpload:
     filename: str
     content_type: str
     content: bytes
+    file_path: str
 
 
 class FileIngestionService:
-    """Convert files to text embeddings and store only vectors."""
+    """Convert files to text embeddings, store vectors, and search them."""
 
     def __init__(
         self,
         description_client: ImageDescriptionClient,
         model_client: ModelClient,
         qdrant_store: QdrantStore,
+        settings: Settings | None = None,
     ) -> None:
         self._description_client = description_client
         self._model_client = model_client
         self._qdrant_store = qdrant_store
+        self._settings = settings
 
     @property
     def embedding_model(self) -> str:
@@ -65,6 +74,39 @@ class FileIngestionService:
         """Embed query text without storing it."""
         return self._model_client.embed_text(text)
 
+    def search(self, query: str, limit: int) -> VectorSearchResponse:
+        """Search stored vectors by embedded query text."""
+        threshold = self._settings.SEARCH_THRESHOLD if self._settings else None
+        if threshold is None:
+            raise SettingsError("Search is not configured")
+        vector = self._model_client.embed_text(query)
+        hits = self._qdrant_store.search(vector, limit=limit, score_threshold=threshold)
+        items = [
+            self._to_search_item(hit) for hit in hits if self._has_full_payload(hit)
+        ]
+        return VectorSearchResponse(data=items)
+
+    @staticmethod
+    def _has_full_payload(hit: SearchHit) -> bool:
+        """Points without a complete payload are excluded from results."""
+        payload = hit.payload
+        return all(
+            payload.get(key) is not None
+            for key in ("filename", "file_path", "file_type", "content")
+        )
+
+    @staticmethod
+    def _to_search_item(hit: SearchHit) -> VectorSearchItem:
+        payload = hit.payload
+        return VectorSearchItem(
+            point_id=hit.point_id,
+            score=hit.score,
+            filename=str(payload["filename"]),
+            file_path=str(payload["file_path"]),
+            file_type=str(payload["file_type"]),
+            content=str(payload["content"]),
+        )
+
     def _process_one(self, file: FileUpload) -> FileEmbeddingItem:
         try:
             processed = process_file(
@@ -74,7 +116,15 @@ class FileIngestionService:
             )
             embedding_text = self._to_embedding_text(processed)
             vector = self._model_client.embed_text(embedding_text)
-            self._qdrant_store.store_embedding(vector)
+            payload = None
+            if processed.kind == "image":
+                payload = {
+                    "filename": file.filename,
+                    "file_path": file.file_path,
+                    "file_type": file.content_type,
+                    "content": embedding_text,
+                }
+            self._qdrant_store.store_embedding(vector, payload=payload)
         except ModelNotFoundError:
             raise
         except (FileProcessingError, ModelEndpointError, QdrantStorageError) as exc:

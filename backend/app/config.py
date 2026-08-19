@@ -1,11 +1,18 @@
 from typing import Annotated
 
-from pydantic import Field, StringConstraints, model_validator
+from pydantic import BeforeValidator, Field, StringConstraints, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 NonBlankSetting = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1),
+]
+
+OptionalFloatSetting = Annotated[
+    float | None,
+    BeforeValidator(
+        lambda value: None if isinstance(value, str) and not value.strip() else value
+    ),
 ]
 
 
@@ -33,6 +40,7 @@ class Settings(BaseSettings):
     QDRANT_COLLECTION: str = "file_embeddings"
     QDRANT_VECTOR_SIZE: int = Field(gt=0)
     QDRANT_DISTANCE: str = "Cosine"
+    SEARCH_THRESHOLD: OptionalFloatSetting = Field(default=None, ge=0, le=1)
 
     @model_validator(mode="after")
     def _validate_description_endpoint(self) -> "Settings":

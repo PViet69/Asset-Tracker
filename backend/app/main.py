@@ -16,8 +16,8 @@ from backend.app.api.routes.health import (
 from backend.app.api.routes.health import (
     router as health_router,
 )
-from backend.app.api.routes.text_embeddings import (
-    router as text_embeddings_router,
+from backend.app.api.routes.vector_search import (
+    router as vector_search_router,
 )
 from backend.app.config import Settings
 from backend.app.file_embeddings.ingestion_service import FileIngestionService
@@ -66,6 +66,7 @@ def create_app(
                 description_client=description_client,
                 model_client=model_client,
                 qdrant_store=qdrant_store,
+                settings=settings,
             )
             if effective_health_dependencies is None:
                 effective_health_dependencies = HealthDependencies(
@@ -102,7 +103,7 @@ def create_app(
         lifespan=lifespan,
     )
     app.include_router(file_embeddings_router)
-    app.include_router(text_embeddings_router)
+    app.include_router(vector_search_router)
     app.include_router(health_router)
 
     @app.middleware("http")
@@ -110,7 +111,7 @@ def create_app(
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
-        protected_paths = {"/v1/file-embeddings", "/v1/embeddings"}
+        protected_paths = {"/v1/file-embeddings", "/v1/search"}
         if request.url.path in protected_paths and request.method == "POST":
             try:
                 reject_oversized_request(request)

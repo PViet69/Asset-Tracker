@@ -15,12 +15,9 @@ class ImageDescription(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    summary: NonBlankText = Field(
-        description="Concise factual overview of the complete visible image."
-    )
     subjects: tuple[NonBlankText, ...] = Field(
         description=(
-            "Visible people, animals, products, objects, and other primary entities."
+            "Visible people, animals, products, objects, and other primary entities. Just Classify what the subject is(human or dog or cats, etc)"
         )
     )
     attributes: tuple[NonBlankText, ...] = Field(
@@ -38,21 +35,15 @@ class ImageDescription(BaseModel):
         )
     )
     colors: tuple[NonBlankText, ...] = Field(
-        description="Dominant and retrieval-relevant colors tied to visible content."
+        description="colors tied to visible content."
     )
     style: tuple[NonBlankText, ...] = Field(
-        description=(
-            "Medium, photographic or illustrative style, composition, framing, "
-            "and viewpoint."
-        )
+        description=("style of the image, is it anime, real life or art, etc")
     )
     visible_text: tuple[NonBlankText, ...] = Field(
         description=(
-            "Exactly readable visible text; omit obscured content instead of guessing."
+            "Exactly readable visible text; omit obscured content instead of guessing. If none are present, output no text"
         )
-    )
-    search_keywords: tuple[NonBlankText, ...] = Field(
-        description="Concise terms and phrases useful for semantic retrieval."
     )
 
     def to_embedding_text(self) -> str:
@@ -65,9 +56,8 @@ class ImageDescription(BaseModel):
             ("Colors", self.colors),
             ("Style", self.style),
             ("Visible text", self.visible_text),
-            ("Search keywords", self.search_keywords),
         )
-        lines = (f"Summary: {self.summary}",) + tuple(
+        lines = tuple(
             f"{label}: {', '.join(values)}" for label, values in sections if values
         )
         return "\n".join(lines)

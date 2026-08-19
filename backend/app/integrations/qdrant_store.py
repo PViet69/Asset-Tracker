@@ -1,6 +1,7 @@
-"""Qdrant adapter for storing file embedding vectors."""
+"""Qdrant adapter for storing and searching file embedding vectors."""
 
 import logging
+from dataclasses import dataclass
 from typing import Protocol
 from uuid import uuid4
 
@@ -13,16 +14,30 @@ from backend.app.exceptions import QdrantStorageError
 logger = logging.getLogger(__name__)
 
 
+@dataclass(frozen=True)
+class SearchHit:
+    """One scored vector search result with its stored payload."""
+
+    point_id: str
+    score: float
+    payload: dict
+
+
 class QdrantStore(Protocol):
-    """Protocol for Qdrant collection, storage, and health operations."""
+    """Protocol for Qdrant collection, storage, search, and health operations."""
 
     def ensure_collection(self) -> None: ...
-    def store_embedding(self, embedding: list[float]) -> str: ...
+    def store_embedding(
+        self, embedding: list[float], payload: dict | None = None
+    ) -> str: ...
+    def search(
+        self, vector: list[float], limit: int, score_threshold: float
+    ) -> list[SearchHit]: ...
     def check_health(self) -> str: ...
 
 
 class QdrantEmbeddingStore:
-    """Store embedding vectors in a configured Qdrant collection."""
+    """Store and search embedding vectors in a configured Qdrant collection."""
 
     def __init__(self, settings: Settings) -> None:
         self._client = QdrantClient(
@@ -64,11 +79,13 @@ class QdrantEmbeddingStore:
             logger.error("Qdrant collection operation failed", exc_info=True)
             raise QdrantStorageError("Qdrant storage failure") from exc
 
-    def store_embedding(self, embedding: list[float]) -> str:
+    def store_embedding(
+        self, embedding: list[float], payload: dict | None = None
+    ) -> str:
         """Upsert one embedding point and return its generated UUID."""
         point_id = str(uuid4())
         try:
-            point = PointStruct(id=point_id, vector=embedding, payload=None)
+            point = PointStruct(id=point_id, vector=embedding, payload=payload)
             self._client.upsert(
                 collection_name=self._collection,
                 points=[point],
@@ -78,6 +95,29 @@ class QdrantEmbeddingStore:
             logger.error("Qdrant embedding upsert failed", exc_info=True)
             raise QdrantStorageError("Qdrant storage failure") from exc
         return point_id
+
+    def search(
+        self, vector: list[float], limit: int, score_threshold: float
+    ) -> list[SearchHit]:
+        """Return top scored points at or above score_threshold."""
+        try:
+            points = self._client.query_points(
+                collection_name=self._collection,
+                query=vector,
+                limit=limit,
+                score_threshold=score_threshold,
+            ).points
+        except Exception as exc:  # noqa: BLE001
+            logger.error("Qdrant search failed", exc_info=True)
+            raise QdrantStorageError("Qdrant storage failure") from exc
+        return [
+            SearchHit(
+                point_id=str(point.id),
+                score=point.score,
+                payload=point.payload or {},
+            )
+            for point in points
+        ]
 
     def check_health(self) -> str:
         """Return Qdrant availability without exposing client errors."""

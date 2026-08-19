@@ -4,6 +4,7 @@ from fastapi import (
     APIRouter,
     Depends,
     File,
+    Form,
     HTTPException,
     Request,
     UploadFile,
@@ -44,6 +45,7 @@ def authorize_upload(request: Request) -> None:
 )
 def create_file_embeddings(
     files: list[UploadFile] | None = File(default=None),
+    file_path: list[str] | None = Form(default=None),
     service: FileIngestionService = Depends(get_file_ingestion_service),
 ) -> FileEmbeddingResponse:
     """Create embeddings for uploaded files."""
@@ -57,9 +59,21 @@ def create_file_embeddings(
                 detail=f"A maximum of {MAX_FILES} files is allowed",
             )
 
+        paths: list[str] = list(file_path) if file_path else []
+        if len(paths) > len(files):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"`file_path` has more entries than `files` "
+                    f"({len(paths)} paths for {len(files)} files)"
+                ),
+            )
+        while len(paths) < len(files):
+            paths.append("")
+
         uploads: list[FileUpload] = []
         aggregate_size = 0
-        for file in files:
+        for index, file in enumerate(files):
             remaining = MAX_AGGREGATE_UPLOAD_SIZE - aggregate_size
             content = file.file.read(min(MAX_FILE_SIZE + 1, remaining + 1))
             aggregate_size += len(content)
@@ -68,6 +82,7 @@ def create_file_embeddings(
                     filename=file.filename or "",
                     content_type=file.content_type or "",
                     content=content,
+                    file_path=paths[index],
                 )
             )
             if aggregate_size > MAX_AGGREGATE_UPLOAD_SIZE:

@@ -1,6 +1,6 @@
 # OpenAI-Compatible File Embeddings
 
-FastAPI service that accepts text, image, and PDF uploads, runs each image through a configurable vision-language model that returns a structured image description, embeds that description (or the raw text) via a configured text-embedding model, and stores only the resulting vectors in Qdrant. Raw vectors and image descriptions are never returned.
+FastAPI service that accepts text, image, and PDF uploads, runs each image through a configurable vision-language model that returns a structured image description, embeds that description (or the raw text) via a configured text-embedding model, and stores the resulting vectors in Qdrant. Image points also store a payload with the filename, MIME type, and description text for vector search. Raw vectors are never returned.
 
 ## Pipeline at a glance
 
@@ -54,6 +54,7 @@ uv run uvicorn backend.app.main:create_app --factory --reload
 | `QDRANT_COLLECTION` | No | `file_embeddings` | Qdrant collection name. |
 | `QDRANT_VECTOR_SIZE` | Yes | None | Vector size; must match `EMBEDDING_MODEL` output. |
 | `QDRANT_DISTANCE` | No | `Cosine` | Qdrant distance metric used when creating the collection. |
+| `SEARCH_THRESHOLD` | No | None | Minimum cosine similarity (0–1) for `/v1/search` hits. Search is unavailable when unset. |
 
 At startup, the app checks the configured Qdrant collection and creates it when missing using the configured vector size and distance metric.
 
@@ -105,34 +106,6 @@ The response contains one result per uploaded file:
 
 Public items contain filename, content type, status (`success` or `failed`), and a safe reason when failed. Embedding vectors, Qdrant point IDs, image descriptions, image bytes, API keys, tracebacks, and local paths are never returned.
 
-## Create text embeddings for vector search
-
-`POST /v1/embeddings` accepts OpenAI-compatible JSON and returns query vectors without storing them in Qdrant. Use the same model used for uploaded files so vector dimensions and embedding space match.
-
-```bash
-curl -X POST http://localhost:8000/v1/embeddings \
-  -H "Authorization: Bearer $UPLOAD_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"input":"search text"}'
-```
-
-`input` must be a single non-blank string. The response uses the configured `EMBEDDING_MODEL` for the `model` field. `usage` contains zero values because delegated embedding calls do not expose token counts.
-
-OpenAI Python client:
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    base_url="http://localhost:8000/v1",
-    api_key="not-needed",
-)
-
-response = client.embeddings.create(input="Your text string goes here")
-
-print(response.data[0].embedding)
-```
-
 ### Supported content
 
 Type detection uses file bytes through `python-magic`; filename extensions do not determine type.
@@ -153,6 +126,40 @@ Scanned PDFs are unsupported because OCR is out of scope.
 - Missing files or more than 10 files return HTTP 400
 - Empty, oversized, unsupported, invalid, model-failed, or storage-failed files return per-file errors with HTTP 200 when the request itself is valid
 
+## Vector search
+
+`POST /v1/search` embeds the query text with the configured `EMBEDDING_MODEL` and returns stored vectors scoring at or above `SEARCH_THRESHOLD`, ordered by similarity. Results come from image points carrying a payload with the upload filename, MIME type, and stored description text. Text/PDF points and legacy payload-less points are excluded from results.
+
+```bash
+curl -X POST http://localhost:8000/v1/search \
+  -H "Authorization: Bearer $UPLOAD_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"query":"a red sports car","limit":10}'
+```
+
+Response:
+
+```json
+{
+  "object": "list",
+  "data": [
+    {
+      "point_id": "3f2b...",
+      "score": 0.87,
+      "filename": "photo.png",
+      "file_path": "photos/2026/photo.png",
+      "file_type": "image/png",
+      "content": "Description text..."
+    }
+  ]
+}
+```
+
+- `query` must be a single non-blank string (max 8192 characters).
+- `limit` is optional, default 10, valid range 1–100.
+- `SEARCH_THRESHOLD` must be set before calling this endpoint; when unset the endpoint returns HTTP 503 with `{"detail":"Search is not configured"}`.
+- Requires the same bearer auth and rate limit as uploads.
+
 ## Health
 
 ```bash
@@ -170,8 +177,9 @@ The `model` field reports `ok` only when both `DESCRIPTION_MODEL` and `EMBEDDING
 ## Privacy
 
 - Image bytes leave the app only as part of the description request to `MODEL_ENDPOINT_URL`.
-- Image descriptions are transient. They are held in memory only long enough to be embedded, then discarded. Descriptions are never logged, persisted, returned in API responses, or stored as Qdrant payload.
-- Stored Qdrant points carry the vector only — no payload, no filename, no metadata.
+- Image descriptions are persisted as Qdrant point payloads (alongside the upload filename and MIME type) so search results can surface them.
+- Text/PDF vectors are stored without payloads.
+- API responses never expose raw vectors, API keys, tracebacks, or local paths.
 
 ## Security
 
