@@ -1,7 +1,6 @@
 import { config } from "../config";
 import type {
   FileEmbeddingResponse,
-  HealthResponse,
   VectorSearchResponse,
 } from "../types";
 
@@ -40,15 +39,6 @@ async function parseError(res: Response): Promise<never> {
   throw new ApiError(res.status, message);
 }
 
-async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(`${config.apiBase}${path}`, {
-    method: "GET",
-    headers: buildHeaders(),
-  });
-  if (!res.ok) await parseError(res);
-  return (await res.json()) as T;
-}
-
 async function postJson<T>(path: string, body: unknown): Promise<T> {
   const res = await fetch(`${config.apiBase}${path}`, {
     method: "POST",
@@ -57,10 +47,6 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   });
   if (!res.ok) await parseError(res);
   return (await res.json()) as T;
-}
-
-export function checkHealth(): Promise<HealthResponse> {
-  return getJson<HealthResponse>("/health");
 }
 
 export function searchVectors(

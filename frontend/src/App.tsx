@@ -1,5 +1,4 @@
 import { useState } from "react";
-import { HealthBadge } from "./components/HealthBadge";
 import { UploadPanel } from "./components/UploadPanel";
 import { SearchPanel } from "./components/SearchPanel";
 
@@ -31,7 +30,6 @@ export function App(): JSX.Element {
             <div className="sub">OpenAI-compatible · quick tester</div>
           </div>
         </div>
-        <HealthBadge />
       </header>
 
       <div className="tabs" role="tablist">

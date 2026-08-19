@@ -27,10 +27,3 @@ export type VectorSearchResponse = {
   object: "list";
   data: VectorSearchItem[];
 };
-
-// Mirrors backend/app/api/schemas/health.py
-export type HealthResponse = {
-  status: string; // "ok" | "degraded" | ...
-  qdrant: string;
-  model: string;
-};

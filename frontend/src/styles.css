@@ -102,29 +102,6 @@ header.bar {
   font-size: 12px; color: var(--text-muted); margin-top: 2px;
   letter-spacing: 0.02em;
 }
-.pill {
-  display: none; /* hidden by default per spec */
-  align-items: center; gap: 8px;
-  padding: 6px 12px;
-  border-radius: 999px;
-  font-size: 12px; font-weight: 500;
-  color: var(--text-dim);
-  background: var(--surface);
-  backdrop-filter: blur(12px);
-  border: 1px solid var(--border);
-}
-.pill.show { display: inline-flex; }
-.pill .dot {
-  width: 8px; height: 8px; border-radius: 50%;
-  background: var(--text-muted);
-  box-shadow: 0 0 0 0 currentColor;
-}
-.pill.ok    { color: var(--ok); border-color: rgba(74,222,128,0.35); background: rgba(74,222,128,0.08); }
-.pill.ok    .dot { background: var(--ok); box-shadow: 0 0 10px var(--ok); }
-.pill.warn  { color: var(--warn); border-color: rgba(251,191,36,0.35); background: rgba(251,191,36,0.08); }
-.pill.warn  .dot { background: var(--warn); box-shadow: 0 0 10px var(--warn); }
-.pill.err   { color: var(--err); border-color: rgba(251,113,133,0.35); background: rgba(251,113,133,0.08); }
-.pill.err   .dot { background: var(--err); box-shadow: 0 0 10px var(--err); }
 
 /* Segmented tabs */
 .tabs {
