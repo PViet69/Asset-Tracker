@@ -188,3 +188,42 @@ File uploads require `UPLOAD_API_KEY` bearer authentication (when configured) an
 For production deployments behind a reverse proxy (e.g. Nginx, Traefik, Caddy, or AWS ALB), enforce ingress request body limits (such as Nginx `client_max_body_size 250m;`) to bound chunked uploads before body spooling occurs at the ASGI application server level.
 
 Health checks use low-cost model listing and do not submit embedding or description requests.
+
+## Frontend (Embedding UI)
+
+A small Vite + React + TypeScript SPA at `frontend/` for uploading files and searching vectors against the running FastAPI backend.
+
+### Setup
+
+```bash
+cd frontend
+npm install
+cp .env.example .env.local   # optional — adjust VITE_API_BASE / VITE_API_KEY
+```
+
+### Run (dev)
+
+```bash
+# Terminal 1: backend on :8000
+uv run uvicorn backend.app.main:create_app --factory --reload
+
+# Terminal 2: frontend on :5173 (proxies /v1 + /health to :8000)
+cd frontend && npm run dev
+```
+
+Open `http://localhost:5173/`.
+
+### Build
+
+```bash
+cd frontend && npm run build   # tsc + vite build, output in frontend/dist
+```
+
+### Configuration
+
+| Env var | Default | Purpose |
+| --- | --- | --- |
+| `VITE_API_BASE` | `http://localhost:8000` | Backend root URL. In dev, only used as the Vite proxy target; production builds hit it directly. |
+| `VITE_API_KEY` | unset | Optional bearer token sent as `Authorization: Bearer <key>`. Never surfaced in UI. Set this when the backend requires `UPLOAD_API_KEY`. |
+
+Note: `/v1/search` additionally requires the backend `SEARCH_THRESHOLD` to be configured; the UI surfaces the backend's 503 error as a banner when it is not.
