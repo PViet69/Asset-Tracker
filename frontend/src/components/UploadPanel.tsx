@@ -16,14 +16,29 @@ function badgeLabel(status: FileEmbeddingItem["status"]): string {
   return status === "success" ? "stored" : "failed";
 }
 
+function relativePath(file: File): string {
+  // webkitRelativePath is set when files come from <input webkitdirectory>.
+  // It is "" for files picked individually. Fall back to the basename.
+  const rel = file.webkitRelativePath;
+  return rel && rel.length > 0 ? rel : file.name;
+}
+
 export function UploadPanel(): JSX.Element {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [state, setState] = useState<UploadState>({ kind: "idle" });
   const [pending, setPending] = useState<File[]>([]);
+  const [folderName, setFolderName] = useState<string>("");
 
   function onPick(event: ChangeEvent<HTMLInputElement>): void {
     const files = event.target.files ? Array.from(event.target.files) : [];
     setPending(files);
+    // Use the first file's relative-path root to display the picked folder.
+    const first = files[0];
+    const rel = first?.webkitRelativePath ?? "";
+    const root = rel.split("/")[0] ?? "";
+    setFolderName(files.length > 0 && root.length > 0 ? root : "");
+    // Reset the input so re-picking the same folder fires onChange again.
+    event.target.value = "";
   }
 
   function openPicker(): void {
@@ -33,8 +48,9 @@ export function UploadPanel(): JSX.Element {
   async function onSubmit(): Promise<void> {
     if (pending.length === 0) return;
     setState({ kind: "submitting" });
+    const paths = pending.map(relativePath);
     try {
-      const res = await uploadFiles(pending);
+      const res = await uploadFiles(pending, paths);
       setState({ kind: "result", items: res.data });
     } catch (err) {
       const message =
@@ -48,6 +64,11 @@ export function UploadPanel(): JSX.Element {
       <input
         ref={inputRef}
         type="file"
+        // @ts-expect-error - webkitdirectory is non-standard but supported
+        // in Chromium, Firefox, and Safari.
+        webkitdirectory=""
+        directory=""
+        mozdirectory=""
         multiple
         onChange={onPick}
         style={{ display: "none" }}
@@ -58,15 +79,17 @@ export function UploadPanel(): JSX.Element {
         type="button"
         className="drop"
         onClick={openPicker}
-        aria-label="Choose files"
+        aria-label="Choose folder"
       >
-        <strong>Click to browse</strong> or drop files here
-        <div className="meta">PDF, TXT, MD, PNG, JPG · up to 10 files</div>
+        <strong>Click to browse a folder</strong>
+        <div className="meta">PDF, TXT, MD, PNG, JPG · up to 10 files · paths preserved</div>
       </button>
 
       <div className="actions">
         <span className="meta">
-          {pending.length} file{pending.length === 1 ? "" : "s"} selected
+          {pending.length === 0
+            ? "No folder selected"
+            : `${folderName} · ${pending.length} file${pending.length === 1 ? "" : "s"}`}
         </span>
         <button
           className="primary"

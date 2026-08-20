@@ -57,11 +57,19 @@ export function searchVectors(
 }
 
 export async function uploadFiles(
-  files: File[]
+  files: File[],
+  filePaths: string[] = []
 ): Promise<FileEmbeddingResponse> {
   const form = new FormData();
   for (const file of files) {
     form.append("files", file, file.name);
+  }
+  // Backend route accepts repeating `file_path` form fields aligned with
+  // `files`. Pad with empty strings so the count matches.
+  const padded = filePaths.slice(0, files.length);
+  while (padded.length < files.length) padded.push("");
+  for (const filePath of padded) {
+    form.append("file_path", filePath);
   }
   // NOTE: do NOT set Content-Type — browser must add the multipart boundary.
   const res = await fetch(`${config.apiBase}/v1/file-embeddings`, {
