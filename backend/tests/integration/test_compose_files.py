@@ -8,7 +8,7 @@ ROOT = Path(__file__).parents[3]
 def test_compose_defines_app_and_qdrant_services() -> None:
     compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
 
-    assert set(compose["services"]) == {"app", "qdrant"}
+    assert set(compose["services"]) == {"app", "frontend", "qdrant"}
     assert compose["services"]["app"]["build"] == "."
     assert compose["services"]["app"]["ports"] == ["127.0.0.1:${APP_PORT:-8000}:8000"]
     assert (
@@ -17,6 +17,21 @@ def test_compose_defines_app_and_qdrant_services() -> None:
     assert compose["services"]["qdrant"]["volumes"] == [
         "qdrant_storage:/qdrant/storage"
     ]
+
+
+def test_compose_defines_frontend_service() -> None:
+    compose = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
+    frontend = compose["services"]["frontend"]
+
+    assert frontend["build"] == "./frontend"
+    assert frontend["ports"] == ["127.0.0.1:${FRONTEND_PORT:-5173}:80"]
+    assert frontend["environment"]["UPLOAD_API_KEY"] == "${UPLOAD_API_KEY:-}"
+    assert frontend["depends_on"] == ["app"]
+    nginx_template = (
+        ROOT / "frontend" / "nginx-templates" / "default.conf.template"
+    ).read_text()
+    assert "client_max_body_size 250m" in nginx_template
+    assert "proxy_pass http://app:8000" in nginx_template
 
 
 def test_compose_uses_safe_reproducible_qdrant_defaults() -> None:

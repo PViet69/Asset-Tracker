@@ -60,12 +60,14 @@ At startup, the app checks the configured Qdrant collection and creates it when 
 
 ## Docker Compose
 
-Docker Desktop with Compose can run the app plus Qdrant:
+Docker Desktop with Compose can run the app, the frontend UI, and Qdrant:
 
 ```bash
 cp .env.example .env
 docker compose up --build
 ```
+
+The UI is served at `http://localhost:${FRONTEND_PORT:-5173}/`; its nginx reverse-proxies `/v1` and `/health` to the app container, so the browser stays same-origin and no CORS configuration is needed. When `UPLOAD_API_KEY` is set, the frontend container injects the bearer header at the proxy — the key never reaches the browser bundle.
 
 When the model API runs on the Docker Desktop host, set `MODEL_ENDPOINT_URL=http://host.docker.internal:8001/v1`. In other environments, use a URL reachable from the app container. Compose connects the app to Qdrant using service DNS.
 
@@ -188,3 +190,43 @@ File uploads require `UPLOAD_API_KEY` bearer authentication (when configured) an
 For production deployments behind a reverse proxy (e.g. Nginx, Traefik, Caddy, or AWS ALB), enforce ingress request body limits (such as Nginx `client_max_body_size 250m;`) to bound chunked uploads before body spooling occurs at the ASGI application server level.
 
 Health checks use low-cost model listing and do not submit embedding or description requests.
+
+## Frontend (Embedding UI)
+
+A small Vite + React + TypeScript SPA at `frontend/` for uploading files and searching vectors against the running FastAPI backend.
+
+### Setup
+
+```bash
+cd frontend
+npm install
+cp .env.example .env.local   # optional — adjust VITE_API_BASE / VITE_API_KEY
+```
+
+### Run (dev)
+
+```bash
+# Terminal 1: backend on :8000
+uv run uvicorn backend.app.main:create_app --factory --reload
+
+# Terminal 2: frontend on :5173 (proxies /v1 + /health to :8000)
+cd frontend && npm run dev
+```
+
+Open `http://localhost:5173/`.
+
+### Build
+
+```bash
+cd frontend && npm run build   # tsc + vite build, output in frontend/dist
+```
+
+### Configuration
+
+| Env var | Default | Purpose |
+| --- | --- | --- |
+| `VITE_API_BASE` | empty (same-origin) | Backend root URL. Leave empty — the Vite dev proxy and Docker nginx both forward `/v1` and `/health` to the backend. Set only if the backend gains CORS support. |
+| `VITE_API_KEY` | unset | Optional bearer token sent as `Authorization: Bearer <key>`. Not needed when running behind the Docker frontend proxy (nginx injects the header). |
+| `PROXY_TARGET` | `http://localhost:8000` | Dev-only: Vite dev-server proxy target. Never bundled into the app. |
+
+Note: `/v1/search` additionally requires the backend `SEARCH_THRESHOLD` to be configured; the UI surfaces the backend's 503 error as a banner when it is not.
